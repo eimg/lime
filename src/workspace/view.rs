@@ -62,6 +62,7 @@ impl Render for Workspace {
         self.request_preview_level(window, cx);
         self.refresh_composite_preview(window, cx);
         self.refresh_effect_preview_resolution(window, cx);
+        self.refresh_warp_resolution(window, cx);
         self.refresh_recovery(window, cx);
         let interactive = self.form.is_none() && !self.dialog_open && self.pdf_job.is_none();
         let active = self.active_tab();
@@ -1010,13 +1011,21 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap_1()
-                .child(step_button("selection-radius-down", "−").on_click(
-                    cx.listener(|this, _, window, cx| this.nudge_selection_radius(-1, window, cx)),
-                ))
+                .child(
+                    step_button("selection-radius-down", "−")
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.nudge_selection_radius(-1, window, cx)
+                        })),
+                )
                 .child(self.numeric_chip(NumericField::SelectionRadius, None, cx))
-                .child(step_button("selection-radius-up", "+").on_click(
-                    cx.listener(|this, _, window, cx| this.nudge_selection_radius(1, window, cx)),
-                )),
+                .child(
+                    step_button("selection-radius-up", "+")
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.nudge_selection_radius(1, window, cx)
+                        })),
+                ),
         )
     }
 
@@ -1554,7 +1563,9 @@ impl Workspace {
                             show_guides: self.preferences.show_guides,
                             grid_spacing: self.preferences.grid_spacing,
                             guides: self.displayed_guides(),
-                            crop: self.crop,
+                            crop: self
+                                .crop
+                                .or_else(|| tab.pending_canvas().and_then(|pending| pending.crop)),
                             layer_bounds: if self.preferences.show_layer_bounds {
                                 tab.document.content.layer(tab.active_layer).map(|layer| {
                                     let offset = self
@@ -1575,6 +1586,10 @@ impl Workspace {
                             selection: self
                                 .selection_preview
                                 .clone()
+                                .or_else(|| {
+                                    tab.pending_canvas()
+                                        .and_then(|pending| pending.selection.clone())
+                                })
                                 .unwrap_or_else(|| tab.selection.clone()),
                             show_handles: matches!(
                                 self.preferences.tool,
@@ -1584,7 +1599,10 @@ impl Workspace {
                             warp: self.warp_frame(),
                             gradient: self.gradient_frame(),
                             stroke: self.stroke_paint(),
-                            free_path: self.free_points.clone(),
+                            free_path: tab.pending_canvas().map_or_else(
+                                || self.free_points.clone(),
+                                |pending| pending.free_points.clone(),
+                            ),
                             free_nodes: self.free_nodes.clone(),
                             free_node_drag: self.free_node_drag.map(|(index, _)| index),
                             polygon: self.preferences.tool == Tool::FreeSelect,

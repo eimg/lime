@@ -40,13 +40,13 @@ struct ScalePreviewRequest {
 }
 
 impl ScalePreviewRequest {
-    fn can_publish(self, current: Self, dirty: bool, has_overlay: bool) -> bool {
+    fn can_publish(self, current: Self, dirty: bool, dragging: bool) -> bool {
         self.token == current.token && self.tab == current.tab
             && self.layer == current.layer && self.generation == current.generation
             && self.resample == current.resample
-            // A first, same-session sprite keeps the canvas responsive while
-            // the newest geometry is being rendered. Later results must be exact.
-            && (!has_overlay || (!dirty && self.target == current.target))
+            // Pointer motion may show completed same-session frames while newer
+            // geometry renders. Settled/numeric edits require the latest request.
+            && (dragging || (!dirty && self.target == current.target))
     }
 }
 
@@ -299,7 +299,7 @@ impl Workspace {
                     request.can_publish(
                         *current,
                         this.scale_preview_dirty,
-                        this.scale_overlay.is_some(),
+                        this.scale_pointer_dragging(),
                     )
                 }) {
                     // An interim sprite follows the latest frame, rather than
@@ -480,28 +480,22 @@ impl Workspace {
         if !self.can_apply_scale() {
             return;
         }
-        let Some(drag) = self.scale_drag.take() else {
+        let Some(drag) = self.scale_drag else {
             return;
         };
         self.scale_token = self.scale_token.wrapping_add(1);
         self.scale_preview_dirty = false;
-        let overlay = self.scale_overlay.take();
         if drag.target == drag.original {
-            if let Some(overlay) = overlay {
-                super::drop_images(overlay.into_images(), window, cx);
-            }
+            self.cancel_scale(window, cx);
             cx.notify();
             return;
         }
         let resample = self.preferences.warp_resample;
-        self.edit_content(
+        self.apply_preview(
             move |content, _, _| commit_scale(content, drag, resample),
             window,
             cx,
         );
-        if let Some(overlay) = overlay {
-            super::drop_images(overlay.into_images(), window, cx);
-        }
         cx.notify();
     }
 
@@ -772,5 +766,35 @@ impl ScaleEdges {
             (false, true) => CursorStyle::ResizeUpDown,
             (false, false) => CursorStyle::Crosshair,
         }
+    }
+}
+
+#[cfg(test)]
+mod preview_publication_tests {
+    use super::*;
+
+    #[test]
+    fn pointer_frames_progress_but_numeric_frames_never_reverse_to_old_requests() {
+        let old = ScalePreviewRequest {
+            token: 1,
+            tab: 2,
+            layer: crate::document::LayerId(3),
+            generation: 4,
+            target: PixelRect::new(0, 0, 100, 100),
+            resample: crate::transform::Resample::Bilinear,
+        };
+        let mut latest = old;
+        latest.target = PixelRect::new(0, 0, 200, 200);
+        assert!(old.can_publish(latest, true, true));
+        assert!(!old.can_publish(latest, true, false));
+        assert!(latest.can_publish(latest, false, false));
+        latest.token += 1;
+        assert!(!old.can_publish(latest, true, true));
+        latest = old;
+        latest.tab += 1;
+        assert!(!old.can_publish(latest, true, true));
+        latest = old;
+        latest.resample = crate::transform::Resample::Nearest;
+        assert!(!old.can_publish(latest, true, true));
     }
 }

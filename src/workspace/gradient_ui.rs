@@ -546,7 +546,7 @@ impl Workspace {
         let Some(layer) = self.gradient.as_ref().map(|session| session.layer) else {
             return;
         };
-        self.edit_content(
+        self.apply_preview(
             move |content, _, selection| content.apply_gradient(layer, gradient, selection),
             window,
             cx,

@@ -329,7 +329,6 @@ pub(super) enum NumericFollowup {
         layer: crate::document::LayerId,
         path: Option<crate::paths::PathId>,
     },
-    SelectionRadius(i32),
     Focus(NumericField),
     Effect {
         reopen: bool,
@@ -1044,10 +1043,6 @@ impl Workspace {
                         }
                         NumericFollowup::Effect { reopen } => {
                             this.run_last_effect(reopen, window, cx);
-                            None
-                        }
-                        NumericFollowup::SelectionRadius(delta) => {
-                            this.nudge_selection_radius(delta, window, cx);
                             None
                         }
                         NumericFollowup::Stroke {

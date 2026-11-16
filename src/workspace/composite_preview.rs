@@ -36,6 +36,13 @@ impl Workspace {
     }
 
     pub(super) fn move_paint(&self) -> Option<MovePaint> {
+        if let Some(paint) = self
+            .active_tab()
+            .and_then(|tab| tab.pending_canvas())
+            .and_then(|pending| pending.paint.clone())
+        {
+            return Some(paint);
+        }
         let raw = self.raw_move_paint()?;
         if self
             .active_tab()
@@ -49,6 +56,40 @@ impl Workspace {
         } else {
             Some(raw)
         }
+    }
+
+    // Transfer the visible representation before canceling its tool session.
+    // Keeping only an Arc clone would let cancellation evict the still-visible
+    // GPU images and force another upload during Apply.
+    pub(super) fn take_move_paint(&mut self) -> Option<MovePaint> {
+        let visible = self.move_paint()?;
+        if self
+            .composite_preview
+            .published
+            .as_ref()
+            .is_some_and(|(_, paint)| paint.sprite.id == visible.sprite.id)
+        {
+            return self
+                .composite_preview
+                .published
+                .take()
+                .map(|(_, paint)| paint);
+        }
+        for slot in [
+            &mut self.move_overlay,
+            &mut self.warp_overlay,
+            &mut self.gradient_overlay,
+            &mut self.text_overlay,
+            &mut self.scale_overlay,
+        ] {
+            if slot
+                .as_ref()
+                .is_some_and(|paint| paint.sprite.id == visible.sprite.id)
+            {
+                return slot.take();
+            }
+        }
+        None
     }
 
     pub(super) fn refresh_composite_preview(

@@ -239,10 +239,27 @@ impl RenderedCanvas {
         }
         if size_changed || dirty == Dirty::Canvas {
             let pixels = content.composite();
+            let shifts: Vec<_> = levels.iter().map(TileCache::shift).collect();
+            levels = std::iter::once(0)
+                .chain(shifts.into_iter().filter(|shift| *shift != 0))
+                .map(|shift| {
+                    let mut cache = TileCache::leveled(
+                        width,
+                        height,
+                        preview::TILE_FINE,
+                        preview::FILTER_APRON,
+                        shift,
+                    );
+                    cache
+                        .fill_from_composite(&pixels, &|| Ok(()))
+                        .expect("new composite and cache dimensions agree");
+                    cache
+                })
+                .collect();
             return Some(CanvasPatch {
                 has_transparency: pixels.pixels().any(|pixel| pixel.0[3] < 255),
                 preview: Some(render_preview(&pixels)),
-                levels: vec![filled_cache(content)],
+                levels,
                 replace_levels: true,
                 tiles_changed: true,
                 thumbnails: thumbnails(content),

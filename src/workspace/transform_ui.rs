@@ -290,7 +290,15 @@ fn layer_mirror(action: LayerAdjust) -> Mirror {
     }
 }
 
-const PREVIEW_EDGE: u32 = 256;
+// Bound both output allocation and inverse-map samples; never rasterize an entire
+// native-size layer just because the canvas is zoomed in.
+const MAX_WARP_PREVIEW_EDGE: u32 = 2048;
+
+fn preview_edge(bounds: (u32, u32), physical_pixel_size: f32) -> u32 {
+    ((bounds.0.max(bounds.1) as f32 * physical_pixel_size).ceil() as u32)
+        .clamp(1, MAX_WARP_PREVIEW_EDGE)
+        .min(bounds.0.max(bounds.1))
+}
 pub(super) const MAX_TRANSFORM_COORD: f64 = i32::MAX as f64 + document::MAX_NEW_EDGE as f64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -987,11 +995,33 @@ impl Workspace {
         }
         let pixels = placed.pixels;
         let offset = placed.offset;
-        self.edit_content(
+        self.apply_preview(
             move |content, _, _| content.place_layer_with_mask(layer, pixels, offset, mask),
             window,
             cx,
         );
+    }
+
+    fn desired_warp_preview_edge(&self, scale: f32) -> Option<u32> {
+        let session = self.warp.as_ref()?;
+        let tab = self.active_tab()?;
+        let geometry = PreviewGeometry::for_tab(tab, self.viewport.get(), scale)?;
+        let bounds =
+            transform::warp_bounds(session.offset, session.source.dimensions(), session.spec())
+                .ok()?;
+        Some(preview_edge(
+            bounds.size,
+            f32::from(geometry.bounds.size.width) * scale / tab.document.width() as f32,
+        ))
+    }
+
+    pub(super) fn refresh_warp_resolution(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .desired_warp_preview_edge(window.scale_factor())
+            .is_some_and(|edge| edge != self.warp_preview_edge)
+        {
+            self.request_warp_preview(window, cx);
+        }
     }
 
     fn request_warp_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1008,6 +1038,9 @@ impl Workspace {
                         .then_some(())
                         .ok_or(WarpError::TooLarge)
                 });
+        self.warp_preview_edge = self
+            .desired_warp_preview_edge(window.scale_factor())
+            .unwrap_or(1024);
         self.warp_error = result.err().map(WarpError::message);
         self.warp_dirty = result.is_ok();
         if self.warp_error.is_some() {
@@ -1040,8 +1073,9 @@ impl Workspace {
         let opacity = session.opacity;
         let layer = session.layer;
         let resample = self.preferences.warp_resample;
+        let edge = self.warp_preview_edge;
         let job = cx.background_executor().spawn(async move {
-            let placed = transform::warp_layer(&source, offset, warp, resample, Some(PREVIEW_EDGE));
+            let placed = transform::warp_layer(&source, offset, warp, resample, Some(edge));
             let (below, above, sprite) = match placed {
                 Ok(placed) => {
                     let mut shown = layers::with_layer_opacity(&placed.pixels, opacity);
@@ -1051,7 +1085,7 @@ impl Workspace {
                             offset,
                             warp,
                             resample,
-                            Some(PREVIEW_EDGE),
+                            Some(edge),
                         ) {
                             Ok(transformed) => {
                                 for (pixel, mask) in
@@ -1099,7 +1133,9 @@ impl Workspace {
                 workspace.warp_busy = false;
                 let current = workspace.warp.is_some()
                     && workspace.warp_token == token
-                    && (!workspace.warp_dirty || workspace.warp_overlay.is_none());
+                    && workspace.preferences.warp_resample == resample
+                    && (!workspace.warp_dirty
+                        || workspace.warp.as_ref().is_some_and(WarpSession::dragging));
                 if !current {
                     drop_preview(preview, window, cx);
                 } else {
@@ -1349,4 +1385,33 @@ fn drop_preview(preview: WarpPreview, window: &mut Window, cx: &mut Context<Work
         images.push(sprite.image);
     }
     super::drop_images(images, window, cx);
+}
+
+#[cfg(test)]
+mod preview_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn warp_preview_covers_retina_display_and_preserves_native_detail() {
+        let pixels = RgbaImage::from_fn(512, 384, |x, y| {
+            image::Rgba([x as u8, y as u8, (x ^ y) as u8, 255])
+        });
+        for warp in [
+            Warp::Flip(Mirror::Horizontal),
+            Warp::Rotate(23.),
+            Warp::Perspective([(0., 0.), (500., 6.), (480., 370.), (8., 380.)]),
+        ] {
+            let bounds = transform::warp_bounds((0, 0), pixels.dimensions(), warp).unwrap();
+            let edge = preview_edge(bounds.size, 1.);
+            let preview =
+                transform::warp_layer(&pixels, (0, 0), warp, Resample::Bilinear, Some(edge))
+                    .unwrap();
+            let full =
+                transform::warp_layer(&pixels, (0, 0), warp, Resample::Bilinear, None).unwrap();
+            assert_eq!(preview.pixels, full.pixels);
+            assert_eq!(preview.offset, full.offset);
+        }
+        assert_eq!(preview_edge((4096, 2048), 0.25 * 2.), 2048);
+        assert_eq!(preview_edge((16000, 16000), 8.), MAX_WARP_PREVIEW_EDGE);
+    }
 }

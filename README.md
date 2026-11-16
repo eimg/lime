@@ -57,6 +57,7 @@ keeps essential tool controls, layer thumbnails with a **+** after the last laye
 each section scrolls independently without scrollbars. Use its top button to expand it.
 Finish an active drag before toggling the sidebar.
 Apply or cancel canvas previews before changing layer or path visibility.
+Applying keeps the preview visible until the finished edit is ready.
 Fold secondary option sections with the mouse or keyboard to leave more room for Layers and Paths;
 their headers summarize active settings. Oval Select uses **1:1** for circles.
 Aspect-ratio choices also reshape the current selection or crop box.

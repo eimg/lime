@@ -138,22 +138,25 @@ impl TileCache {
         check: &impl Fn() -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(
-            self.shift == 0 && pixels.dimensions() == (self.canvas_width, self.canvas_height),
+            pixels.dimensions() == (self.canvas_width, self.canvas_height),
             "Invalid prepared tile source"
         );
         for index in 0..self.tiles.len() {
             check()?;
             let rect = self.coverage(index as u32 % self.cols, index as u32 / self.cols);
-            self.tiles[index] = Some(Arc::new(
-                image::imageops::crop_imm(
-                    pixels,
-                    rect.x as u32,
-                    rect.y as u32,
-                    rect.width,
-                    rect.height,
-                )
-                .to_image(),
-            ));
+            let region = image::imageops::crop_imm(
+                pixels,
+                rect.x as u32,
+                rect.y as u32,
+                rect.width,
+                rect.height,
+            )
+            .to_image();
+            self.tiles[index] = Some(Arc::new(if self.shift == 0 {
+                region
+            } else {
+                box_downsample(&region, self.shift)
+            }));
         }
         check()
     }

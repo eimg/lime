@@ -243,3 +243,42 @@ fn a_failed_recovery_replacement_keeps_its_previous_embedded_draft() {
     assert_eq!(documents[0].document.name, "Recovered Atomic");
     recovered.clean_exit();
 }
+
+#[test]
+fn full_canvas_changes_publish_existing_reduced_levels_with_the_new_pixels() {
+    let mut content = DocumentContent::single_layer(
+        "Fine detail".into(),
+        RgbaImage::from_fn(519, 267, |x, y| {
+            Rgba([if (x + y) % 2 == 0 { 255 } else { 0 }, 80, 30, 200])
+        }),
+    );
+    let bottom = content.top_layer_id();
+    content.add_layer(bottom, "Top".into(), Rgba([20, 100, 220, 90]));
+    let mut canvas = document::RenderedCanvas::new(&content);
+    for shift in [1, 2] {
+        canvas.install_cache(document::build_level(&content, shift));
+    }
+    assert!(content.move_layer(bottom, 1));
+    let patch = document::RenderedCanvas::prepare_patch(
+        &canvas.pixels,
+        true,
+        canvas.level_caches(),
+        &content,
+        Dirty::Canvas,
+    )
+    .unwrap();
+    canvas.apply(patch);
+    assert_eq!(canvas.pixels, content.composite());
+    for shift in [0, 1, 2] {
+        assert!(
+            canvas.has_level(shift),
+            "first published frame must keep level {shift}"
+        );
+        let expected = document::build_level(&content, shift);
+        let levels = canvas.level_caches();
+        let actual = levels.iter().find(|level| level.shift() == shift).unwrap();
+        for span in expected.spans() {
+            assert_eq!(actual.slot(span.index), expected.slot(span.index));
+        }
+    }
+}

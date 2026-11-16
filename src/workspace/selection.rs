@@ -91,6 +91,15 @@ impl PendingAspectRatio {
     }
 }
 
+pub(super) struct PendingRadius {
+    context: PendingAspectRatio,
+    value: u32,
+}
+
+fn stepped_radius(value: u32, delta: i32, max: u32) -> u32 {
+    (i64::from(value) + i64::from(delta)).clamp(0, i64::from(max)) as u32
+}
+
 impl Workspace {
     fn creation_feather_radius(&self) -> u32 {
         if self.preferences.selection_feather_enabled {
@@ -101,9 +110,17 @@ impl Workspace {
     }
 
     pub(super) fn active_selection_radius(&self) -> u32 {
+        if let Some(pending) = &self.pending_radius {
+            return pending.value;
+        }
         match self
             .selection_preview
             .as_ref()
+            .or_else(|| {
+                self.active_tab()
+                    .and_then(|tab| tab.pending_canvas())
+                    .and_then(|pending| pending.selection.as_ref())
+            })
             .or_else(|| self.active_tab().map(|tab| &tab.selection))
         {
             Some(selection) if selection.feather_geometry().is_some() => {
@@ -234,6 +251,7 @@ impl Workspace {
 
     pub(super) fn clear_selection_gesture(&mut self) {
         self.pending_aspect_ratio = None;
+        self.pending_radius = None;
         if self
             .numeric_edit
             .as_ref()
@@ -405,7 +423,7 @@ impl Workspace {
 
     pub(super) fn finish_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let gesture = self.selection_drag.take();
-        let preview = self.selection_preview.take();
+        let preview = self.selection_preview.clone();
         match (gesture, preview) {
             (Some(SelectionGesture::Create { op, .. }), Some(shape)) => {
                 let feather = self.creation_feather_radius();
@@ -429,7 +447,9 @@ impl Workspace {
             }
             (Some(_), Some(selection)) => self.commit_placed_selection(selection, window, cx),
             (Some(_), None) => cx.notify(),
-            (None, _) => {}
+            (None, _) => {
+                self.selection_preview = None;
+            }
         }
     }
 
@@ -661,6 +681,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.active_tab().is_none_or(|tab| tab.busy()) {
+            return;
+        }
+        self.selection_preview = Some(selection.clone());
         self.update_selection(
             move |current, size| {
                 if let Some(geometry) = current.feather_geometry() {
@@ -817,8 +841,7 @@ impl Workspace {
         if self.free_points.len() < 3 || self.active_tab().is_none_or(|tab| tab.busy()) {
             return;
         }
-        let points = std::mem::take(&mut self.free_points);
-        self.clear_free_draft();
+        let points = self.free_points.clone();
         let op = self.free_op;
         let antialias = self.preferences.free_antialias;
         let feather = self.creation_feather_radius();
@@ -967,12 +990,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.commit_numeric_with_followup(
-            super::numeric::NumericFollowup::SelectionRadius(delta),
-            window,
-            cx,
-        ) || self.active_tab().is_some_and(|tab| tab.busy())
-        {
+        self.commit_numeric_edit(window, cx);
+        if self.active_tab().is_some_and(|tab| {
+            tab.busy()
+                && tab
+                    .pending_canvas()
+                    .is_none_or(|pending| pending.selection.is_none())
+        }) {
             return;
         }
         let max = self.selection_shape_rect().map_or_else(
@@ -985,8 +1009,16 @@ impl Workspace {
             |rect| rect.width.min(rect.height) / 2,
         );
         let max = max.min(i32::MAX as u32) as i32;
-        self.preferences.selection_radius =
-            (self.active_selection_radius() as i32 + delta).clamp(0, max) as u32;
+        let value = stepped_radius(self.active_selection_radius(), delta, max as u32);
+        if let Some(tab) = self.active_tab().filter(|tab| tab.editing) {
+            self.pending_radius = Some(PendingRadius {
+                context: PendingAspectRatio::new(tab, self.preferences.tool, false, None),
+                value,
+            });
+            cx.notify();
+            return;
+        }
+        self.preferences.selection_radius = value;
         let selection = self
             .selection_preview
             .clone()
@@ -1009,10 +1041,52 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(super) fn finish_pending_radius(
+        &mut self,
+        id: usize,
+        generation: u64,
+        change: super::Change,
+        published: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .pending_radius
+            .as_ref()
+            .is_none_or(|pending| pending.context.tab != id)
+        {
+            return;
+        }
+        let pending = self.pending_radius.take().unwrap();
+        if !matches!(change, super::Change::Selection)
+            || self.form.is_some()
+            || self.dialog_open
+            || self.numeric_edit.is_some()
+            || self.active_tab().is_none_or(|tab| {
+                !pending
+                    .context
+                    .accepts(tab, self.preferences.tool, generation, published)
+            })
+        {
+            return;
+        }
+        let delta = i64::from(pending.value) - i64::from(self.active_selection_radius());
+        self.nudge_selection_radius(
+            delta.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+            window,
+            cx,
+        );
+    }
+
     pub(super) fn selection_shape_rect(&self) -> Option<PixelRect> {
         let selection = self
             .selection_preview
             .as_ref()
+            .or_else(|| {
+                self.active_tab()
+                    .and_then(|tab| tab.pending_canvas())
+                    .and_then(|pending| pending.selection.as_ref())
+            })
             .or_else(|| self.active_tab().map(|tab| &tab.selection))?;
         if let Some(geometry) = selection.feather_geometry() {
             return Some(geometry.rect);
@@ -1393,4 +1467,32 @@ pub(super) enum SelectionCommand {
     Invert,
     Clear,
     Crop,
+}
+
+#[cfg(test)]
+mod radius_handoff_tests {
+    use super::*;
+
+    #[test]
+    fn queued_steps_clamp_in_order_and_require_the_original_selection_commit() {
+        let mut tab = super::super::preview_handoff_tests::tab();
+        let pending = PendingAspectRatio::new(&tab, Tool::Select, false, None);
+        let mut value = 8;
+        for delta in [1, 1, 1, -1] {
+            value = stepped_radius(value, delta, 8);
+        }
+        assert_eq!(value, 7); // Saturated + clicks must not cancel the later - click.
+        assert_eq!(stepped_radius(0, -1, 8), 0);
+        assert!(!pending.accepts(&tab, Tool::Select, 0, false)); // still busy
+        tab.publish_change(0, super::super::Change::Selection, None, 1);
+        assert!(pending.accepts(&tab, Tool::Select, 0, false)); // no-op may drain clicks
+        assert!(!pending.accepts(&tab, Tool::OvalSelect, 0, false));
+        tab.id += 1;
+        assert!(!pending.accepts(&tab, Tool::Select, 0, false));
+        tab.id -= 1;
+        tab.history.commit(tab.state(), 2, false);
+        assert!(pending.accepts(&tab, Tool::Select, 0, true));
+        tab.history.commit(tab.state(), 3, true);
+        assert!(!pending.accepts(&tab, Tool::Select, 0, true));
+    }
 }

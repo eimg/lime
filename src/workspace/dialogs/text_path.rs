@@ -594,7 +594,8 @@ impl Workspace {
                         cx.notify();
                     }
                     Ok(pixels) => {
-                        this.dismiss_form(window, cx);
+                        draft.applying = true;
+                        this.applying_form = Some((target.tab, target.generation));
                         this.edit_content(
                             move |content, active, _| {
                                 let Some(id) =

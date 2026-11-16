@@ -2,8 +2,8 @@
 title: "Previews, Apply, Cancel, and undo"
 description: "Know when an edit is a draft, how to finish numeric fields, and how text differs from transforms."
 translationKey: "basics/previews"
-sourceRevision: "1.2.2-guide-1"
-translatedRevision: "1.2.2-guide-1"
+sourceRevision: "1.2.3-preview-1"
+translatedRevision: "1.2.3-preview-1"
 ---
 
 ## Finish a tool preview {#tool-previews}
@@ -16,11 +16,15 @@ Crop, Gradient, Scale Layer, Rotate, Flip, and Perspective can show a draft on t
 
 Scale and the warp tools keep the original pixels while you revise their preview. Repeated adjustments before Apply do not repeatedly resample the committed layer. Switching tools, layers, or tabs cancels those transform previews. Apply/Cancel dismiss the transform controls; select the tool again to begin another session.
 
+After Apply, the visible canvas draft stays in place while the finished edit is prepared.
+
 ## Numeric fields have their own edit {#fields}
 
 Return inside a numeric field usually finishes that field. It does not apply a Scale/Rotate/Perspective session. Empty input or Escape restores the field's starting value while retaining earlier preview adjustments. Crop's coordinates update its draft immediately.
 
 Finish the field, then use the preview's **Apply**. Save and other commands resolve supported inline edits first, but an unfinished canvas preview still needs Apply or Cancel.
+
+Rectangle Select’s radius **− / +** buttons keep rapid clicks in order. The number shows the latest requested radius while the selection updates.
 
 ## Text and strokes {#text-strokes}
 
@@ -31,6 +35,8 @@ Painting commits when you release the pointer. Escape cancels an unfinished stro
 ## Effect dialogs and saved state {#dialogs-history}
 
 In effect dialogs, **Before/After** compares appearance without changing parameters. Apply uses the chosen parameters even while Before is displayed. **Cancel** closes without changing pixels. **Reset** returns built-in defaults and shows After.
+
+After Apply, effect and Text Along Path dialogs show **Applying…** until the finished edit is ready. Their controls are temporarily unavailable.
 
 Undoing back to the saved document state clears its unsaved marker. Exporting an image does not save the editable project. Selection-only edits do not require project Save, while layer changes, masks, paths, and guides do.
 

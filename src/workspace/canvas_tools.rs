@@ -408,11 +408,11 @@ impl Workspace {
         if self.refuse_text_pixels(true, cx) {
             return;
         }
-        let Some(crop) = self.crop.take() else {
+        let Some(crop) = self.crop else {
             return;
         };
         self.crop_drag = None;
-        self.edit_content(
+        self.apply_preview(
             move |content, _, selection| {
                 if content.crop(crop) {
                     *selection = selection.clone().rebase(

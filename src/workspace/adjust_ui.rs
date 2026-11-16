@@ -228,8 +228,8 @@ impl Workspace {
         let layer = session.layer;
         let adjustment = session.adjustment;
         let target = (session.tab, session.generation);
-        self.clear_adjustment(window, cx);
         if adjustment.is_identity() && !reediting {
+            self.clear_adjustment(window, cx);
             return;
         }
         self.edit_effect(

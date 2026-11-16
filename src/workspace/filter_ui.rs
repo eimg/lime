@@ -161,8 +161,8 @@ impl Workspace {
             cx.notify();
             return false;
         }
-        self.clear_filter(window, cx);
         if spec.is_identity() && !reediting {
+            self.clear_filter(window, cx);
             return true;
         }
         self.edit_effect(

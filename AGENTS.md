@@ -775,9 +775,9 @@ document is a single plain layer without paths, guides, or editable text.
   the live resampled preview, and the commit that resamples the layer. It coalesces
   bounded previews from original pixels/masks in the background, follows the current
   resampling choice, and rejects results after Apply, cancellation, or context changes.
-  If the first preview completes during a drag, its same-session/same-resampling
-  sprite follows the latest frame while the newest target renders; subsequent
-  publication requires the exact latest request.
+  During pointer drags, completed same-session/same-resampling sprites follow the
+  latest frame while the newest target renders. Settled and numeric updates
+  require the latest request, including the first visible frame.
   Release retains the draft; later pointer/numeric gestures capture the current
   target as their baseline while preserving the original source for one Apply.
   Frame and draft sizes exist only during the transform session; tool preferences persist separately; completion never
@@ -1352,6 +1352,24 @@ app backups, and project build caches can be removed when cleanup is requested.
 
 
 ## Editing and storage contracts
+
+- Canvas Apply retains the already-visible sprite, crop box, or selection outline
+  in a tab-owned display handoff until the matching generation publishes (or is
+  rejected/no-op). Sprite ownership transfers before tool cancellation so the
+  pending frame keeps its GPU cache. Handoffs never enter history/save/recovery.
+  Adjustment, filter, and Text Along Path dialogs retain their comparison preview
+  and disable controls with Applying… until canvas publication, then dismiss.
+  Rectangle radius steps accumulate individually clamped desired values during
+  selection commits; the readout shows that desired value. Deferred changes validate
+  tab, layer, tool, and generation and are discarded on context changes.
+- Warp preview resolution follows transformed bounds, zoom, and display scale,
+  capped at 2048 pixels per edge without source upscaling. Only the transformed
+  sprite changes resolution; ordinary Move and unaffected layers keep their
+  existing rendering. Pointer drags may publish completed same-session warp
+  frames; settled/numeric updates reject superseded frames. Full-resolution Apply
+  retains the selected resampling. Full-canvas patches prepare all existing tile
+  levels from one new composite, so layer reorder does not temporarily discard
+  the current reduced sampling level.
 
 - `src/document/composite.rs` preserves the original high-precision Normal path
   and adds alpha-aware Multiply/Screen/Overlay. Blend colors contribute where

@@ -58,6 +58,16 @@ type PreparedChange = (
     crate::document::CanvasPatch,
 );
 
+// Display-only handoff. It never enters history, saving, or recovery snapshots.
+struct PendingCanvas {
+    generation: u64,
+    layer: LayerId,
+    paint: Option<layers::MovePaint>,
+    crop: Option<CropRect>,
+    selection: Option<Selection>,
+    free_points: Vec<Point<f32>>,
+}
+
 struct Tab {
     id: usize,
     stroke_anchor: Option<(LayerId, f64, f64)>,
@@ -77,9 +87,18 @@ struct Tab {
     // Keep the slider at the released value while the canvas patch renders.
     pending_opacity: Option<(LayerId, u8)>,
     pending_guides: Option<Vec<crate::guides::Guide>>,
+    pending_canvas: Option<PendingCanvas>,
 }
 
 impl Tab {
+    fn pending_canvas(&self) -> Option<&PendingCanvas> {
+        self.pending_canvas.as_ref().filter(|pending| {
+            self.editing
+                && pending.generation == self.history.generation()
+                && pending.layer == self.active_layer
+        })
+    }
+
     fn layer_opacity(&self) -> u8 {
         self.pending_opacity
             .filter(|(id, _)| *id == self.active_layer)
@@ -130,6 +149,33 @@ impl Tab {
 
     // Return replaced or rejected images to the workspace for GPU cache cleanup.
     fn publish_change(
+        &mut self,
+        generation: u64,
+        change: Change,
+        result: Option<PreparedChange>,
+        stamp: u64,
+    ) -> (bool, Vec<Arc<RenderImage>>) {
+        if self
+            .pending_canvas
+            .as_ref()
+            .is_some_and(|pending| pending.generation != generation)
+        {
+            return (
+                false,
+                result.map_or_else(Vec::new, |(_, _, _, patch)| patch.into_images()),
+            );
+        }
+        let pending = self.pending_canvas.take();
+        let (published, mut dropped) =
+            self.publish_prepared_change(generation, change, result, stamp);
+        if let Some(paint) = pending.and_then(|pending| pending.paint) {
+            dropped.extend(paint.into_images());
+        }
+        (published, dropped)
+    }
+
+    // Return replaced or rejected images to the workspace for GPU cache cleanup.
+    fn publish_prepared_change(
         &mut self,
         generation: u64,
         change: Change,
@@ -280,6 +326,7 @@ pub struct Workspace {
     selection_drag: Option<selection::SelectionGesture>,
     selection_preview: Option<Selection>,
     pending_aspect_ratio: Option<selection::PendingAspectRatio>,
+    pending_radius: Option<selection::PendingRadius>,
     free_points: Vec<Point<f32>>,
     free_nodes: Vec<usize>,
     free_node_drag: Option<(usize, Point<f32>)>,
@@ -301,6 +348,7 @@ pub struct Workspace {
     warp_overlay: Option<layers::MovePaint>,
     warp_token: u64,
     warp_busy: bool,
+    warp_preview_edge: u32,
     warp_dirty: bool,
     warp_applying: bool,
     warp_error: Option<&'static str>,
@@ -323,6 +371,7 @@ pub struct Workspace {
     filter: Option<filter_ui::FilterSession>,
     filter_preview: Option<EffectImages>,
     effect_before: bool,
+    applying_form: Option<(usize, u64)>,
     effect_reediting: bool,
     effect_memory: effects::EffectMemory,
     filter_generation: crate::adjustments::PreviewGeneration,
@@ -543,6 +592,7 @@ impl Workspace {
             selection_drag: None,
             selection_preview: None,
             pending_aspect_ratio: None,
+            pending_radius: None,
             free_points: Vec::new(),
             free_nodes: Vec::new(),
             free_node_drag: None,
@@ -564,6 +614,7 @@ impl Workspace {
             warp_overlay: None,
             warp_token: 0,
             warp_busy: false,
+            warp_preview_edge: 0,
             warp_dirty: false,
             warp_applying: false,
             warp_error: None,
@@ -586,6 +637,7 @@ impl Workspace {
             filter: None,
             filter_preview: None,
             effect_before: false,
+            applying_form: None,
             effect_reediting: false,
             effect_memory: effects::EffectMemory::default(),
             filter_generation: crate::adjustments::PreviewGeneration::default(),
@@ -687,6 +739,7 @@ impl Workspace {
             pending_text: None,
             pending_opacity: None,
             pending_guides: None,
+            pending_canvas: None,
         });
         self.next_id += 1;
         self.select_tab(self.tabs.len() - 1, window, cx);
@@ -772,6 +825,9 @@ impl Workspace {
         }
         let removed = self.tabs.remove(index);
         self.remove_recovery_tab(removed.id, cx);
+        if let Some(paint) = removed.pending_canvas.and_then(|pending| pending.paint) {
+            drop_images(paint.into_images(), window, cx);
+        }
         drop_canvas(removed.document.canvas, window, cx);
 
         self.active = match self.active {
@@ -853,10 +909,30 @@ impl Workspace {
         self.cancel_scale(window, cx);
     }
 
+    fn apply_preview(
+        &mut self,
+        edit: impl FnOnce(&mut DocumentContent, &mut LayerId, &mut Selection) -> Dirty + Send + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_preview_change(Change::Edit, edit, true, window, cx);
+    }
+
     fn start_change(
         &mut self,
         change: Change,
         edit: impl FnOnce(&mut DocumentContent, &mut LayerId, &mut Selection) -> Dirty + Send + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_preview_change(change, edit, false, window, cx);
+    }
+
+    fn start_preview_change(
+        &mut self,
+        change: Change,
+        edit: impl FnOnce(&mut DocumentContent, &mut LayerId, &mut Selection) -> Dirty + Send + 'static,
+        retain_preview: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -872,9 +948,29 @@ impl Workspace {
         // Typed text lands as its own undo step before this change runs.
         if self.finish_text(window, cx) {
             self.defer_after_text(move |this, window, cx| {
-                this.start_change(change, edit, window, cx);
+                this.start_preview_change(change, edit, retain_preview, window, cx);
             });
             return;
+        }
+        if retain_preview || matches!(change, Change::Selection) {
+            let paint = retain_preview.then(|| self.take_move_paint()).flatten();
+            let tab = &mut self.tabs[index];
+            tab.pending_canvas = Some(PendingCanvas {
+                generation: tab.history.generation(),
+                layer: tab.active_layer,
+                paint,
+                crop: retain_preview.then_some(self.crop).flatten(),
+                selection: matches!(change, Change::Selection).then(|| {
+                    self.selection_preview
+                        .clone()
+                        .unwrap_or_else(|| tab.selection.clone())
+                }),
+                free_points: if matches!(change, Change::Selection) {
+                    self.free_points.clone()
+                } else {
+                    Vec::new()
+                },
+            });
         }
         self.clear_content_previews(window, cx);
         self.clear_free_draft();
@@ -933,6 +1029,10 @@ impl Workspace {
             self.drop_settled_text(window, cx);
         }
         let published = self.publish_change(id, generation, change, result, window, cx);
+        if self.applying_form == Some((id, generation)) {
+            self.applying_form = None;
+            self.dismiss_form(window, cx);
+        }
         self.effect_memory.finish(id, generation, published);
         self.preferences.effects = self.effect_memory.preferences();
         self.finish_clone_alignment(id, generation, published);
@@ -959,6 +1059,7 @@ impl Workspace {
         }
         self.finish_numeric_followup(id, generation, published, window, cx);
         self.finish_pending_nudge(id, generation, published, window, cx);
+        self.finish_pending_radius(id, generation, change, published, window, cx);
         self.finish_pending_aspect_ratio(id, generation, change, published, window, cx);
     }
 
@@ -1120,5 +1221,112 @@ fn drop_images(
 fn drop_canvas(canvas: RenderedCanvas, window: &mut Window, cx: &mut Context<Workspace>) {
     for image in canvas.into_images() {
         cx.drop_image(image, Some(window));
+    }
+}
+
+#[cfg(test)]
+mod preview_handoff_tests {
+    use super::*;
+    use image::{Rgba, RgbaImage};
+
+    pub(super) fn tab() -> Tab {
+        let content = DocumentContent::single_layer(
+            "Test".into(),
+            RgbaImage::from_pixel(16, 16, Rgba([20, 40, 60, 255])),
+        );
+        Tab {
+            id: 1,
+            stroke_anchor: None,
+            active_layer: content.top_layer_id(),
+            document: Document::from_content("Test".into(), content),
+            zoom: Zoom::default(),
+            pan: Point::default(),
+            history: History::new(true),
+            editing: true,
+            saving: None,
+            exporting: false,
+            notice: None,
+            building_level: None,
+            selection: Selection::Unrestricted,
+            pending_text: None,
+            pending_opacity: None,
+            pending_guides: None,
+            pending_canvas: None,
+        }
+    }
+
+    #[test]
+    fn visible_handoff_leaves_committed_data_untouched_and_settles_with_result() {
+        for outcome in ["publish", "noop", "stale"] {
+            let mut tab = tab();
+            let original = tab.document.canvas.pixels.clone();
+            let preview = crate::document::preview_render(&RgbaImage::from_pixel(
+                16,
+                16,
+                Rgba([240, 30, 10, 255]),
+            ));
+            let preview_id = preview.id;
+            tab.pending_canvas = Some(PendingCanvas {
+                generation: 0,
+                layer: tab.active_layer,
+                paint: Some(layers::MovePaint {
+                    below: None,
+                    above: None,
+                    sprite: preview,
+                    offset: (0, 0),
+                    size: (16, 16),
+                }),
+                crop: None,
+                selection: None,
+                free_points: Vec::new(),
+            });
+            assert!(tab.pending_canvas().is_some());
+            // A completion from a different job must not consume this handoff.
+            assert!(!tab.publish_change(99, Change::Edit, None, 0).0);
+            assert!(tab.pending_canvas().is_some());
+            let layer = tab.active_layer;
+            tab.active_layer = LayerId(999);
+            assert!(tab.pending_canvas().is_none());
+            tab.active_layer = layer;
+            assert!(!tab.dirty());
+            assert!(Arc::ptr_eq(&tab.document.canvas.pixels, &original));
+            assert_eq!(tab.state().content.composite(), original);
+            let mut content = tab.document.content.clone();
+            content.apply_adjustment(
+                tab.active_layer,
+                crate::adjustments::Adjustment::Invert,
+                &Selection::Unrestricted,
+            );
+            let expected = content.composite();
+            let result = (outcome != "noop").then(|| {
+                let patch = RenderedCanvas::prepare_patch(
+                    &original,
+                    false,
+                    tab.document.canvas.level_caches(),
+                    &content,
+                    Dirty::Canvas,
+                )
+                .unwrap();
+                (content, tab.active_layer, Selection::Unrestricted, patch)
+            });
+            if outcome == "stale" {
+                tab.history.commit(tab.state(), 1, false);
+                assert!(tab.pending_canvas().is_none());
+            }
+            let (published, dropped) = tab.publish_change(0, Change::Edit, result, 2);
+            assert_eq!(published, outcome == "publish");
+            assert!(tab.pending_canvas.is_none());
+            assert!(!tab.editing);
+            assert!(dropped.iter().any(|image| image.id == preview_id));
+            assert_eq!(
+                tab.document.canvas.pixels,
+                if published { expected } else { original }
+            );
+            assert_eq!(
+                tab.history.generation(),
+                u64::from(published || outcome == "stale")
+            );
+            assert_eq!(tab.dirty(), published);
+        }
     }
 }

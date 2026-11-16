@@ -377,6 +377,15 @@ impl Workspace {
             self.notice("There is not enough layer memory to retain this effect. Bake an existing effect or use a smaller layer.", cx);
             return;
         }
+        if self.form.as_ref().is_some_and(|form| {
+            matches!(
+                form.kind,
+                super::dialogs::FormKind::Adjustment { .. }
+                    | super::dialogs::FormKind::Filter { .. }
+            )
+        }) {
+            self.applying_form = Some(target);
+        }
         self.edit_content(
             move |content, _, _| {
                 if let Some(spec) = effect.retained_spec() {

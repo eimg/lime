@@ -884,6 +884,9 @@ impl Workspace {
     }
 
     pub(super) fn dismiss_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.applying_form.is_some() {
+            return;
+        }
         if let Some(parent) = self.form.as_mut().and_then(|form| form.parent.take()) {
             parent.focus.focus(window);
             self.form = Some(*parent);
@@ -1174,6 +1177,9 @@ impl Workspace {
     }
 
     fn submit_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.applying_form.is_some() {
+            return;
+        }
         let Some(form) = &mut self.form else {
             return;
         };
@@ -1536,6 +1542,10 @@ impl Workspace {
     }
 
     fn form_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.applying_form.is_some() {
+            cx.stop_propagation();
+            return;
+        }
         let Some(form) = &mut self.form else {
             return;
         };
@@ -2074,6 +2084,7 @@ impl Workspace {
         if let FormKind::Info(info) = &form.kind {
             return Some(self.info_overlay(info, &form.focus, window, cx));
         }
+        let applying = self.applying_form.is_some();
         let mut can_accept = true;
         let wide_pdf = matches!(form.kind, FormKind::PdfImport { .. });
         let silhouette_filter = matches!(
@@ -2913,6 +2924,11 @@ impl Workspace {
                 .justify_center()
                 .track_focus(&form.focus)
                 .on_key_down(cx.listener(Self::form_key))
+                .when(applying, |overlay| {
+                    overlay
+                        .capture_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                        .capture_any_mouse_up(|_, _, cx| cx.stop_propagation())
+                })
                 .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                     this.extend_pdf_input_drag(event, window, cx)
                 }))
@@ -2981,19 +2997,21 @@ impl Workspace {
                                 .flex_shrink_0()
                                 .justify_end()
                                 .gap_2()
-                                .child(form_button("Cancel", false).on_click(cx.listener(
-                                    |this, _, window, cx| {
-                                        this.dismiss_form(window, cx);
-                                    },
-                                )))
+                                .when(!applying, |row| {
+                                    row.child(form_button("Cancel", false).on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            this.dismiss_form(window, cx);
+                                        },
+                                    )))
+                                })
                                 .child(
-                                    form_button(accept, true)
-                                        .when(can_accept, |button| {
+                                    form_button(if applying { "Applying…" } else { accept }, true)
+                                        .when(can_accept && !applying, |button| {
                                             button.on_click(cx.listener(|this, _, window, cx| {
                                                 this.submit_form(window, cx)
                                             }))
                                         })
-                                        .when(!can_accept, |button| {
+                                        .when(!can_accept || applying, |button| {
                                             button.opacity(0.45).cursor(CursorStyle::Arrow)
                                         }),
                                 ),
