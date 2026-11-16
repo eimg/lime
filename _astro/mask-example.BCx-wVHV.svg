@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="360" viewBox="0 0 960 360">
+  <defs>
+    <pattern id="checker" width="24" height="24" patternUnits="userSpaceOnUse"><rect width="24" height="24" fill="#f1f4fa"/><path d="M0 0H12V12H0ZM12 12H24V24H12Z" fill="#d7dbe3"/></pattern>
+    <linearGradient id="sky" x2="0" y2="1"><stop stop-color="#b4d9ff"/><stop offset="1" stop-color="#ffd896"/></linearGradient>
+    <g id="subject"><path d="M90 285 225 85 345 285Z" fill="#354878"/><path d="m225 85 58 97-47-15-31 13-23-27Z" fill="#eef4ff"/><path d="m225 85 25 200h95Z" fill="#151d36" opacity=".35"/></g>
+    <clipPath id="left"><rect x="24" y="24" width="420" height="312" rx="12"/></clipPath>
+    <clipPath id="right"><rect x="516" y="24" width="420" height="312" rx="12"/></clipPath>
+  </defs>
+  <g clip-path="url(#left)"><rect x="24" y="24" width="420" height="312" fill="url(#sky)"/><circle cx="350" cy="89" r="26" fill="#fff3d2"/><use href="#subject" x="9" y="20"/></g>
+  <path d="M463 180h34m-10-10 10 10-10 10" fill="none" stroke="#67758c" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <g clip-path="url(#right)"><rect x="516" y="24" width="420" height="312" fill="url(#checker)"/><use href="#subject" x="501" y="20"/></g>
+</svg>
