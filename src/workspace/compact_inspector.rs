@@ -54,7 +54,7 @@ impl Workspace {
                             .flex_col()
                             .overflow_hidden()
                             .child(
-                                compact_header(Some(tool.icon), tool.label)
+                                compact_control(compact_header(Some(tool.icon), tool.label))
                                     .id("compact-current-tool")
                                     .tooltip(tooltip_with_detail(
                                         tool.label,
@@ -130,6 +130,11 @@ impl Workspace {
     fn compact_tool_options(&self, cx: &Context<Self>) -> Div {
         use NumericField as N;
         use Tool as T;
+        // Keep the current tool heading, but no document controls or hints,
+        // in an empty workspace. This gate covers every compact tool below.
+        if self.active_tab().is_none() {
+            return div();
+        }
         let mut body = div().flex().flex_col().gap_2().p(px(5.));
         let fields: &[(&str, NumericField)] = match self.preferences.tool {
             T::Pencil => &[("Size", N::BrushSize), ("Opacity", N::BrushOpacity)],
@@ -193,8 +198,10 @@ impl Workspace {
                 );
                 body = body.child(
                     compact_label("Ratio").child(
-                        compact_button("compact-ratio", label, ratio.is_some())
-                            .tooltip(tooltip("Toggle Free / 1:1; expand for all aspect ratios"))
+                        compact_button("compact-ratio", label.clone(), ratio.is_some())
+                            .tooltip(tooltip(format!(
+                                "Ratio {label}. Toggle Free / 1:1; expand for all aspect ratios"
+                            )))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.set_aspect_ratio(
                                     crop,
@@ -336,39 +343,54 @@ impl Workspace {
                     .unwrap_or(self.color_memory.swatches[0]);
                 body = body.child(
                     compact_label("Color").child(
-                        div()
-                            .id("compact-text-color")
-                            .w_full()
-                            .h(px(26.))
-                            .p(px(4.))
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .bg(rgb(CANVAS))
-                            .cursor_pointer()
-                            .hover(|button| button.bg(rgb(HOVER)))
-                            .tooltip(tooltip(format!(
-                                "Text color #{color:06X} — click to change"
-                            )))
-                            .child(div().size_full().rounded_sm().bg(rgb(color)))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let swatch = if this.text_draft.is_some() {
-                                    super::text_ui::TEXT_SWATCH
-                                } else {
-                                    0
-                                };
-                                this.color_form(swatch, window, cx);
-                            })),
+                        compact_control(
+                            div()
+                                .id("compact-text-color")
+                                .w_full()
+                                .h(px(26.))
+                                .p(px(4.))
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .bg(rgb(CANVAS))
+                                .cursor_pointer()
+                                .hover(|button| button.bg(rgb(HOVER)))
+                                .tooltip(tooltip(format!(
+                                    "Text color #{color:06X} — click to change"
+                                )))
+                                .child(div().size_full().rounded_sm().bg(rgb(color))),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let swatch = if this.text_draft.is_some() {
+                                super::text_ui::TEXT_SWATCH
+                            } else {
+                                0
+                            };
+                            this.color_form(swatch, window, cx);
+                        })),
                     ),
                 );
             }
             T::Path => {
-                body = body.child(compact_action(
-                    "compact-stroke-path",
-                    "Stroke",
-                    Box::new(StrokePath),
-                    self.can_stroke_outline(super::stroke_ui::StrokeSource::Path),
-                ))
+                let enabled = self.can_stroke_outline(super::stroke_ui::StrokeSource::Path)
+                    && self.preferences.brushes.outline.opacity > 0;
+                body = body.child(
+                    compact_button("compact-stroke-path", "Stroke", false)
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .when_else(
+                            enabled,
+                            |button| {
+                                button.on_click(cx.listener(|this, _, window, cx| {
+                                    this.stroke_outline(
+                                        super::stroke_ui::StrokeSource::Path,
+                                        window,
+                                        cx,
+                                    );
+                                }))
+                            },
+                            |button| button.opacity(0.4).tab_index(-1).cursor_default(),
+                        ),
+                );
             }
             T::Zoom => {
                 body = body
@@ -385,18 +407,6 @@ impl Workspace {
                         self.active_tab().is_some(),
                     ))
             }
-            T::Eyedropper => {
-                let all = self.preferences.sample_all;
-                body = body.child(
-                    compact_label("Sample").child(
-                        compact_button("compact-sample", if all { "All" } else { "Layer" }, all)
-                            .tooltip(tooltip("Sample all visible layers / active layer"))
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.set_sample_all(!all, cx)),
-                            ),
-                    ),
-                );
-            }
             T::Pan => {
                 body = body.child(
                     div()
@@ -412,41 +422,24 @@ impl Workspace {
     }
 
     fn compact_numeric(&self, label: &'static str, field: NumericField, cx: &Context<Self>) -> Div {
-        compact_label(label).child(
-            self.numeric_chip(field, None, cx)
-                .min_w_0()
-                .w_full()
-                .px_0()
-                .overflow_x_scroll()
-                .scrollbar_width(px(0.)),
-        )
+        compact_label(label).child(self.compact_numeric_chip(field, cx))
     }
 
     fn compact_move_controls(&self, cx: &Context<Self>) -> Div {
         let enabled = self.geometry_enabled() && !self.active_move_locked();
         let choices = [
-            ("align-top", "Align Top", AlignLayer::Top),
-            ("align-bottom", "Align Bottom", AlignLayer::Bottom),
-            ("align-left", "Align Left", AlignLayer::Left),
-            ("align-right", "Align Right", AlignLayer::Right),
             (
                 "align-h-center",
                 "Center Horizontally",
                 AlignLayer::Horizontal,
             ),
             ("align-v-center", "Center Vertically", AlignLayer::Vertical),
-            ("align-center", "Center in Image", AlignLayer::Both),
         ];
-        compact_label("Align").children(choices.chunks(2).map(|row| {
-            div()
-                .flex()
-                .gap_1()
-                .children(row.iter().map(|&(symbol, label, action)| {
-                    align_button(symbol, label, action, enabled, cx)
-                        .flex_1()
-                        .min_w_0()
-                        .h(px(24.))
-                }))
+        compact_label("Align").children(choices.into_iter().map(|(symbol, label, action)| {
+            compact_control(align_button(symbol, label, action, enabled, cx))
+                .w_full()
+                .min_w_0()
+                .when(!enabled, |button| button.tab_index(-1))
         }))
     }
 
@@ -518,21 +511,71 @@ fn compact_button(
     label: impl Into<gpui::SharedString>,
     selected: bool,
 ) -> Stateful<Div> {
-    div()
-        .id(id)
-        .h(px(25.))
-        .w_full()
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_sm()
-        .text_size(px(10.))
-        .bg(rgb(if selected { SELECTED } else { CANVAS }))
-        .text_color(rgb(if selected { ACCENT } else { TEXT }))
-        .hover(|button| button.bg(rgb(HOVER)))
-        .cursor_pointer()
-        .child(label.into())
+    let label = label.into();
+    compact_control(
+        div()
+            .id(id)
+            .h(px(25.))
+            .w_full()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_sm()
+            .text_size(px(10.))
+            .bg(rgb(if selected { SELECTED } else { CANVAS }))
+            .text_color(rgb(if selected { ACCENT } else { TEXT }))
+            .hover(|button| button.bg(rgb(HOVER)))
+            .cursor_pointer()
+            .tooltip(tooltip(label.clone()))
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .text_center()
+                    .text_ellipsis()
+                    .child(label),
+            ),
+    )
+}
+
+/// GPUI clicks focused buttons on key-up. Block canvas bindings and Space pan
+/// on key-down, including repeats; a physical release invokes the same handler
+/// as a pointer click exactly once.
+pub(super) fn compact_control(button: Stateful<Div>) -> Stateful<Div> {
+    button
+        .tab_index(0)
+        .key_context("CompactControl")
+        .border_1()
+        .focus(|button| button.border_color(rgb(ACCENT)))
+        .on_key_down(|event, window, cx| {
+            if let Some(backwards) = compact_tab_direction(&event.keystroke) {
+                focus_compact_neighbor(None, backwards, window);
+                cx.stop_propagation();
+            } else if crate::commands::activate_sidebar_button(event, || {}) {
+                cx.stop_propagation();
+            }
+        })
+}
+
+pub(super) fn compact_tab_direction(key: &gpui::Keystroke) -> Option<bool> {
+    (key.key == "tab" && !key.modifiers.control && !key.modifiers.platform && !key.modifiers.alt)
+        .then_some(key.modifiers.shift)
+}
+
+pub(super) fn focus_compact_neighbor(
+    origin: Option<gpui::FocusHandle>,
+    backwards: bool,
+    window: &mut gpui::Window,
+) {
+    if let Some(origin) = origin {
+        origin.focus(window);
+    }
+    if backwards {
+        window.focus_prev();
+    } else {
+        window.focus_next();
+    }
 }
 
 fn compact_action(
@@ -546,7 +589,7 @@ fn compact_action(
         |button| {
             button.on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
         },
-        |button| button.opacity(0.4).cursor_default(),
+        |button| button.opacity(0.4).tab_index(-1).cursor_default(),
     )
 }
 

@@ -18,7 +18,10 @@ its eye toggles visibility independently. Each group
 scrolls independently without visible scrollbars, with subtle overflow fades;
 headers remain fixed. Compact options omit Apply/Cancel; existing Return/Escape
 bindings apply/cancel previews after finishing any inline numeric edit. Move
-uses shared edge/center alignment actions in a two-column icon grid. Rotate shows
+shows only the shared horizontal-center and vertical-center actions, stacked
+as full-width buttons. Every compact tool hides its controls and hints when no
+image is open, retaining its current tool heading and the inspector sections.
+Rotate shows
 Angle; Flip uses one H/V toggle; Perspective keeps X/Y for the corner selected on
 canvas. Antialias, pivot, corner selection, and Bucket Fill mode stay in the full
 inspector. Brush Smoothing remains compact. Gradient uses one F→B/F→A toggle
@@ -32,6 +35,19 @@ eye, with other eyes shown on hover. Tool headings expand the full inspector.
 A small + row immediately after the last compact layer thumbnail scrolls with
 the list, appears only with an open image, and opens the shared New Layer dialog
 using the existing command's availability and edit-commit rules.
+Compact buttons and numeric chips are keyboard reachable with Tab/Shift+Tab.
+Enter/Space activation uses the CompactControl NoAction context and GPUI's
+key-up click, consuming held key-downs before canvas Apply or Space pan. Numeric
+editing retains its origin for Tab navigation and scrolls long values to the
+caret; idle values and ratio labels ellipsize with full-value tooltips.
+Eyedropper always samples the composite and has no compact sampling switch;
+Bucket's sample_all preference remains independent of that tool. Compact Stroke
+uses the same immediate outline handler and opacity availability as the full
+Paths panel. Layer rows share thumbnail/selection/context-menu/drag/visibility
+helpers across both layouts; drag payloads include their source tab ID.
+Layer and path visibility controls disable during canvas drafts and recheck the
+shared metadata preview guard before editing, preserving unapplied previews.
+Typed geometry and text settle first through stable tab/target followups.
 Compact and expanded views keep separate session scroll handles so switching
 layouts does not clamp the other view's position. Folding is a persistent personal layout choice;
 it finishes numeric edits normally, preserves canvas/text drafts, and retains

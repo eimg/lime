@@ -2,8 +2,8 @@
 title: "Layers နှင့် Transparency"
 description: "Layer ဖန်တီးခြင်း၊ စီခြင်း၊ မြင်ရပုံပြင်ခြင်း၊ Lock နှင့် Movement Link သုံးနည်း။"
 translationKey: "basics/layers"
-sourceRevision: "1.2.3-guide-1"
-translatedRevision: "1.2.3-guide-1"
+sourceRevision: "1.2.3-guide-2"
+translatedRevision: "1.2.3-guide-2"
 ---
 
 ## ပြင်မည့် Layer ရွေးရန် {#active-layer}
@@ -22,7 +22,7 @@ Document ထဲတွင် Layers ကို အပေါ်အောက် စ�
 
 ## ပုံမြင်ရပုံ ပြင်ရန် {#appearance}
 
-1. Row ရှိ Visibility ကို ပိတ်ဖွင့်ပြီး ထို Layer ပါ/မပါ နှိုင်းယှဉ်ပါ။
+1. Row ရှိ Visibility ကို ပိတ်ဖွင့်ပြီး ထို Layer ပါ/မပါ နှိုင်းယှဉ်ပါ။ Crop၊ Transform သို့မဟုတ် Gradient preview ရှိလျှင် အရင် Apply သို့မဟုတ် Cancel လုပ်ပါ။
 2. Layer တစ်ခုလုံး၏ Opacity လျှော့ရန် **Layer → Layer Opacity…** ကို သုံးပါ။
 3. အပေါ်အောက် အစီအစဉ်ကို **Layer → Raise Layer** သို့မဟုတ် **Lower Layer** ဖြင့် ပြောင်းပါ။ အပေါ် Layer ၏ Opaque pixels က အောက် Layer ကို ဖုံးသည်။
 4. ထပ်နေသော Colors ရောစပ်ပုံပြောင်းရန် Layers panel မှ Blend mode ကို ရွေးပါ။ သာမန် Layer ထပ်ပုံအတွက် **Normal** မှ စပါ။ အဖြူပေါ် အမည်းမျဉ်းများပါသော Layer ကို ရောင်စုံ Layer အပေါ်တင်ပြီး **Multiply** စမ်းကြည့်ပါ။ အဖြူက အောက် Color ကို မဖုံးတော့ဘဲ အမည်းမျဉ်းများ ကျန်သည်။ အနက်ပေါ် အလင်းစက်များပါသော Texture ကို ဓာတ်ပုံအပေါ်တင်ပြီး **Screen** စမ်းပါ။ အနက်က ဓာတ်ပုံကို မဖုံးတော့ဘဲ အလင်းနေရာများက ပိုလင်းစေသည်။ ရလဒ်ပြင်းလွန်းလျှင် Layer Opacity လျှော့ပါ။ သာမန်ထပ်ပုံ ပြန်လိုလျှင် Normal ပြန်ရွေးပါ။

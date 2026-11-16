@@ -509,12 +509,14 @@ pub(super) fn tool_disclosure_bindings() -> [KeyBinding; 2] {
     ]
 }
 
-pub(super) fn sidebar_button_bindings() -> [KeyBinding; 2] {
+pub(super) fn sidebar_button_bindings() -> [KeyBinding; 4] {
     // Local button activation must not become a native menu accelerator. In
     // particular, AppKit can render GPUI's named "enter" key as an "E" hint.
     [
         KeyBinding::new("enter", NoAction, Some("SidebarToggle")),
         KeyBinding::new("space", NoAction, Some("SidebarToggle")),
+        KeyBinding::new("enter", NoAction, Some("CompactControl")),
+        KeyBinding::new("space", NoAction, Some("CompactControl")),
     ]
 }
 
@@ -1049,6 +1051,41 @@ fn tool(tool: Tool) -> MenuItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_button_keys_do_not_dispatch_canvas_apply_actions() {
+        use gpui::{KeyContext, Keymap, Keystroke};
+        for primary in ["cmd", "ctrl"] {
+            let keymap = Keymap::new(
+                workspace_bindings(primary)
+                    .into_iter()
+                    .chain(sidebar_button_bindings())
+                    .collect(),
+            );
+            for tool in ["Crop", "ScaleLayer", "Transform", "Gradient"] {
+                let canvas = KeyContext::parse(tool).unwrap();
+                let (matches, _) = keymap.bindings_for_input(
+                    &[Keystroke::parse("enter").unwrap()],
+                    std::slice::from_ref(&canvas),
+                );
+                assert!(
+                    !matches.is_empty(),
+                    "the canvas Apply shortcut must remain available"
+                );
+                for key in ["enter", "space"] {
+                    let (matches, pending) = keymap.bindings_for_input(
+                        &[Keystroke::parse(key).unwrap()],
+                        &[canvas.clone(), KeyContext::parse("CompactControl").unwrap()],
+                    );
+                    assert!(!pending);
+                    assert!(
+                        matches.is_empty(),
+                        "{key} must be local to the focused compact control"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn delete_keys_clear_pixels_but_preserve_path_and_text_editing() {

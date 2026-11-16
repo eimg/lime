@@ -2,8 +2,8 @@
 title: "Layers and transparency"
 description: "Create and organize layers, control their appearance, and use locks and movement links."
 translationKey: "basics/layers"
-sourceRevision: "1.2.3-guide-1"
-translatedRevision: "1.2.3-guide-1"
+sourceRevision: "1.2.3-guide-2"
+translatedRevision: "1.2.3-guide-2"
 ---
 
 ## Choose the layer you edit {#active-layer}
@@ -22,7 +22,7 @@ Click a row in **Layers** to make it active. Painting, fills, and most effects a
 
 ## Control the appearance {#appearance}
 
-1. Toggle a row's visibility to compare the image with and without it.
+1. Toggle a row's visibility to compare the image with and without it. Apply or cancel any Crop, transform, or Gradient preview first.
 2. Choose **Layer → Layer Opacity…** to make the whole layer more transparent.
 3. Use **Layer → Raise Layer** or **Lower Layer** to change stacking. Higher layers cover lower layers where their pixels are opaque.
 4. Choose a blend mode in the Layers panel when you want overlapping colors to interact. Start with **Normal** for ordinary layering. Try **Multiply** for dark linework on white over a colored layer: white stops covering the color beneath while the dark lines remain. Try **Screen** for a light texture on black over a photo: black stops covering the photo while light details brighten it. Reduce layer opacity if the result is too strong; switch back to Normal for ordinary stacking.

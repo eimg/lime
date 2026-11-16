@@ -1,4 +1,4 @@
-use gpui::{Context, Div, Pixels, Point, Window, div, point, prelude::*, px, rgb};
+use gpui::{Context, Div, MouseButton, Pixels, Point, Window, div, point, prelude::*, px, rgb};
 
 use super::Workspace;
 use super::canvas_tools::PreviewGeometry;
@@ -291,6 +291,66 @@ impl Workspace {
         self.path_options(div().flex().flex_col().gap_3().p_4(), cx)
     }
 
+    fn path_visibility_button(
+        &self,
+        tab: usize,
+        id: PathId,
+        visible: bool,
+        compact: bool,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let enabled = self.form.is_none()
+            && !self.dialog_open
+            && self.pdf_job.is_none()
+            && self.active_tab().is_some_and(|tab| !tab.busy())
+            && self.layer_metadata_preview_blocker().is_none();
+        let button = div()
+            .id((
+                if compact {
+                    "compact-path-eye"
+                } else {
+                    "path-eye"
+                },
+                id.0,
+            ))
+            .size(px(22.))
+            .flex_shrink_0()
+            .rounded_sm()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(rgb(if visible { MUTED } else { DISABLED }))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .tooltip(tooltip(
+                if self.layer_metadata_preview_blocker().is_some() {
+                    "Apply or cancel the current canvas edit before changing visibility"
+                } else if visible {
+                    "Hide path"
+                } else {
+                    "Show path"
+                },
+            ))
+            .when_else(
+                enabled,
+                |button| {
+                    button
+                        .cursor_pointer()
+                        .hover(|button| button.bg(rgb(HOVER)).text_color(rgb(TEXT)))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.edit_path_visibility(tab, id, !visible, window, cx);
+                        }))
+                },
+                |button| button.opacity(0.4),
+            )
+            .child(icon(if visible { "eye" } else { "eye-off" }, 14.));
+        if compact && enabled {
+            super::compact_inspector::compact_control(button)
+        } else {
+            button
+        }
+    }
+
     pub(super) fn compact_paths(&self, cx: &Context<Self>) -> Div {
         let panel = div().flex().flex_col().gap_1().p(px(5.));
         let Some(tab) = self
@@ -316,55 +376,40 @@ impl Workspace {
                 .map(|(index, path)| {
                     let id = path.id;
                     let visible = path.visible;
-                    div()
-                        .id(("compact-path", id.0))
-                        .w_full()
-                        .h(px(28.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(rgb(if active == Some(id) { ACCENT } else { BORDER }))
-                        .when(active == Some(id), |row| row.bg(rgb(SELECTED)))
-                        .hover(|row| row.bg(rgb(HOVER)))
-                        .cursor_pointer()
-                        .tooltip(tooltip(format!(
-                            "Path {} · {} anchors",
-                            index + 1,
-                            path.anchors.len()
-                        )))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if this.active_tab().is_some_and(|tab| tab.id == tab_id) {
-                                this.select_path(id, cx);
-                            }
-                        }))
-                        .child(div().flex_1().h_full())
-                        .child(
-                            div()
-                                .id(("compact-path-eye", id.0))
-                                .size(px(22.))
-                                .flex_shrink_0()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_color(rgb(if visible { MUTED } else { DISABLED }))
-                                .hover(|eye| eye.bg(rgb(HOVER)).text_color(rgb(TEXT)))
-                                .tooltip(tooltip(if visible { "Hide path" } else { "Show path" }))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    if this.active_tab().is_some_and(|tab| tab.id == tab_id) {
-                                        this.set_path_visible(id, !visible, window, cx);
-                                    }
-                                }))
-                                .child(icon(if visible { "eye" } else { "eye-off" }, 14.)),
-                        )
+                    super::compact_inspector::compact_control(
+                        div()
+                            .id(("compact-path", id.0))
+                            .w_full()
+                            .h(px(28.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(rgb(if active == Some(id) { ACCENT } else { BORDER }))
+                            .when(active == Some(id), |row| row.bg(rgb(SELECTED)))
+                            .hover(|row| row.bg(rgb(HOVER)))
+                            .cursor_pointer()
+                            .tooltip(tooltip(format!(
+                                "Path {} · {} anchors",
+                                index + 1,
+                                path.anchors.len()
+                            ))),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.active_tab().is_some_and(|tab| tab.id == tab_id) {
+                            this.select_path(id, cx);
+                        }
+                    }))
+                    .child(div().flex_1().h_full())
+                    .child(self.path_visibility_button(tab_id, id, visible, true, cx))
                 }),
         )
     }
 
     pub(super) fn path_options(&self, panel: Div, cx: &Context<Self>) -> Div {
         let tab = self.active_tab();
+        let tab_id = tab.map_or(0, |tab| tab.id);
         let paths = tab.map_or(&[][..], |tab| tab.document.content.paths());
         let active = tab.and_then(|tab| tab.document.content.active_path_id());
         let rows = paths.iter().enumerate().map(|(index, path)| {
@@ -394,24 +439,7 @@ impl Workspace {
                             path.anchors.len()
                         )),
                 )
-                .child(
-                    div()
-                        .id(("path-eye", id.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(px(22.))
-                        .flex_shrink_0()
-                        .rounded_sm()
-                        .text_color(rgb(if visible { MUTED } else { DISABLED }))
-                        .hover(|button| button.bg(rgb(HOVER)).text_color(rgb(TEXT)))
-                        .tooltip(tooltip(if visible { "Hide path" } else { "Show path" }))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.set_path_visible(id, !visible, window, cx);
-                        }))
-                        .child(icon(if visible { "eye" } else { "eye-off" }, 14.)),
-                )
+                .child(self.path_visibility_button(tab_id, id, visible, false, cx))
                 .child(
                     div()
                         .id(("path-delete", id.0))
@@ -553,13 +581,50 @@ impl Workspace {
         }
     }
 
-    fn set_path_visible(
+    pub(super) fn edit_path_visibility(
         &mut self,
+        tab_id: usize,
         id: PathId,
         visible: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.active_tab().is_none_or(|tab| {
+            tab.id != tab_id
+                || tab.busy()
+                || !tab
+                    .document
+                    .content
+                    .paths()
+                    .iter()
+                    .any(|path| path.id == id)
+        }) || self.form.is_some()
+            || self.dialog_open
+            || self.pdf_job.is_some()
+            || self.refuse_layer_metadata_preview(cx)
+        {
+            return;
+        }
+        if self.commit_numeric_with_followup(
+            super::numeric::NumericFollowup::PathVisibility {
+                tab: tab_id,
+                path: id,
+                visible,
+            },
+            window,
+            cx,
+        ) {
+            return;
+        }
+        if self.finish_text(window, cx) {
+            self.defer_after_text(move |this, window, cx| {
+                this.edit_path_visibility(tab_id, id, visible, window, cx)
+            });
+            return;
+        }
+        if self.refuse_layer_metadata_preview(cx) {
+            return;
+        }
         if !visible
             && self
                 .path_selection

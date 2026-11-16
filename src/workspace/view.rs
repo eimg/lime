@@ -96,9 +96,19 @@ impl Render for Workspace {
                     cx.notify();
                 },
             ))
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if this.pdf_job.is_some() && event.keystroke.key == "escape" {
                     this.cancel_pdf_job(cx);
+                    cx.stop_propagation();
+                } else if this.preferences.inspector_folded
+                    && this.form.is_none()
+                    && !this.dialog_open
+                    && this.pdf_job.is_none()
+                    && this.text_draft.is_none()
+                    && let Some(backwards) =
+                        super::compact_inspector::compact_tab_direction(&event.keystroke)
+                {
+                    super::compact_inspector::focus_compact_neighbor(None, backwards, window);
                     cx.stop_propagation();
                 } else {
                     this.begin_space_pan(event, cx);

@@ -288,6 +288,8 @@ pub(super) struct NumericEdit {
     selected: bool,
     original: i64,
     geometry: NumericGeometry,
+    compact_scroll: gpui::ScrollHandle,
+    compact_focus: Option<gpui::FocusHandle>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -300,6 +302,15 @@ struct NumericGeometry {
 }
 
 pub(super) enum NumericFollowup {
+    CompactTab {
+        origin: Option<gpui::FocusHandle>,
+        backwards: bool,
+    },
+    PathVisibility {
+        tab: usize,
+        path: crate::paths::PathId,
+        visible: bool,
+    },
     Key(Keystroke),
     Save(super::files::SaveMode),
     Export,
@@ -375,6 +386,8 @@ impl NumericEdit {
             selected: true,
             original: value,
             geometry: NumericGeometry { crop, ratio: None },
+            compact_scroll: gpui::ScrollHandle::new(),
+            compact_focus: None,
         }
     }
 
@@ -616,6 +629,9 @@ impl Workspace {
         } else {
             None
         };
+        if self.preferences.inspector_folded {
+            edit.compact_focus = window.focused(cx);
+        }
         self.numeric_edit = Some(edit);
         self.numeric_focus.focus(window);
         cx.notify();
@@ -629,6 +645,25 @@ impl Workspace {
     ) -> bool {
         if self.numeric_edit.is_none() {
             return false;
+        }
+        if self.preferences.inspector_folded
+            && let Some(backwards) = super::compact_inspector::compact_tab_direction(key)
+        {
+            let origin = self
+                .numeric_edit
+                .as_ref()
+                .and_then(|edit| edit.compact_focus.clone());
+            if !self.commit_numeric_with_followup(
+                NumericFollowup::CompactTab {
+                    origin: origin.clone(),
+                    backwards,
+                },
+                window,
+                cx,
+            ) {
+                super::compact_inspector::focus_compact_neighbor(origin, backwards, window);
+            }
+            return true;
         }
         if key.key == "escape" {
             self.cancel_numeric_edit(window, cx);
@@ -971,6 +1006,16 @@ impl Workspace {
                         return None;
                     }
                     match pending.followup {
+                        NumericFollowup::CompactTab { origin, backwards } => {
+                            super::compact_inspector::focus_compact_neighbor(
+                                origin, backwards, window,
+                            );
+                            None
+                        }
+                        NumericFollowup::PathVisibility { tab, path, visible } => {
+                            this.edit_path_visibility(tab, path, visible, window, cx);
+                            None
+                        }
                         NumericFollowup::TextOperation {
                             along_path,
                             layer,
@@ -1306,12 +1351,31 @@ impl Workspace {
         label: Option<&'static str>,
         cx: &Context<Self>,
     ) -> gpui::Stateful<Div> {
+        let value = self.numeric_text(field);
+        let chip = self.numeric_chip_base(field, cx);
+        if let Some(label) = label {
+            chip.flex_1()
+                .min_w_0()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(MUTED))
+                        .child(label),
+                )
+                .child(value)
+        } else {
+            chip.min_w(px(48.)).justify_center().child(value)
+        }
+    }
+
+    fn numeric_chip_base(&self, field: NumericField, cx: &Context<Self>) -> gpui::Stateful<Div> {
         let active = self
             .numeric_edit
             .as_ref()
             .is_some_and(|edit| edit.field == field);
-        let value = self.numeric_text(field);
-        let chip = div()
+        div()
             .id(("numeric-field", field.id()))
             .h(px(26.))
             .flex()
@@ -1329,22 +1393,91 @@ impl Workspace {
                     cx.stop_propagation();
                     this.begin_numeric_edit(field, window, cx);
                 }),
-            );
-        if let Some(label) = label {
-            chip.flex_1()
+            )
+    }
+
+    pub(super) fn compact_numeric_chip(
+        &self,
+        field: NumericField,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let edit = self
+            .numeric_edit
+            .as_ref()
+            .filter(|edit| edit.field == field);
+        let full_value = edit.map_or_else(
+            || field.format(self.numeric_value(field).unwrap_or(0)),
+            |edit| edit.text.clone(),
+        );
+        let value = if let Some(edit) = edit {
+            let scroll = &edit.compact_scroll;
+            let text = div()
+                .id(("compact-numeric-scroll", field.id()))
+                .w_full()
                 .min_w_0()
-                .justify_between()
+                .flex()
+                .items_center()
+                .text_size(px(12.))
+                .overflow_x_scroll()
+                .scrollbar_width(px(0.))
+                .track_scroll(scroll);
+            if edit.selected {
+                scroll.set_offset(gpui::Point::default());
+                text.child(
+                    div()
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .bg(rgb(ACCENT))
+                        .text_color(rgb(CANVAS))
+                        .child(edit.text.clone()),
+                )
+            } else {
+                scroll.scroll_to_item(1);
+                let at = edit.byte_at(edit.cursor);
+                text.child(
+                    div()
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .child(edit.text[..at].to_owned()),
+                )
+                .child(div().w(px(1.)).h(px(14.)).flex_shrink_0().bg(rgb(ACCENT)))
                 .child(
                     div()
-                        .text_size(px(10.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(rgb(MUTED))
-                        .child(label),
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .child(edit.text[at..].to_owned()),
                 )
-                .child(value)
+            }
         } else {
-            chip.min_w(px(48.)).justify_center().child(value)
-        }
+            div()
+                .id(("compact-numeric-scroll", field.id()))
+                .w_full()
+                .min_w_0()
+                .text_size(px(12.))
+                .text_center()
+                .text_ellipsis()
+                .child(full_value.clone())
+        };
+        super::compact_inspector::compact_control(self.numeric_chip_base(field, cx))
+            .w_full()
+            .min_w_0()
+            .px(px(2.))
+            // Pointer editing owns the shared numeric focus. Do not briefly
+            // focus this chip and blur/commit an existing edit when reselecting it.
+            .capture_any_mouse_down(|event, window, _| {
+                if event.button == MouseButton::Left {
+                    window.prevent_default();
+                }
+            })
+            .tooltip(super::tooltip::tooltip(full_value))
+            .on_click(
+                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                    if matches!(event, gpui::ClickEvent::Keyboard(_)) {
+                        this.begin_numeric_edit(field, window, cx);
+                    }
+                }),
+            )
+            .child(value)
     }
 
     fn numeric_text(&self, field: NumericField) -> Div {

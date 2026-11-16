@@ -56,13 +56,15 @@ Collapse the right sidebar with its header button, **Cmd/Ctrl+Shift+L**, or
 keeps essential tool controls, layer thumbnails with a **+** after the last layer, and path blocks available;
 each section scrolls independently without scrollbars. Use its top button to expand it.
 Finish an active drag before toggling the sidebar.
+Apply or cancel canvas previews before changing layer or path visibility.
 Fold secondary option sections with the mouse or keyboard to leave more room for Layers and Paths;
 their headers summarize active settings. Oval Select uses **1:1** for circles.
 Aspect-ratio choices also reshape the current selection or crop box.
 Typed numeric edits finish before Save and layer menu commands.
 Delete/Backspace clears the selected area of the active raster layer to transparency.
 Move uses a four-arrow cursor and always moves the active layer.
-Its compact options align the layer to canvas edges or center.
+Its compact options center the layer horizontally or vertically; tool controls
+appear when an image is open.
 New text appears above all layers, regardless of the selected layer.
 Layer → Transform and the toolbox use the same Scale Layer, Rotate, Flip, and
 Perspective tools. Reselecting an active transform keeps its preview.

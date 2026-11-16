@@ -172,6 +172,7 @@ pub(super) enum LayerCommand {
 
 #[derive(Clone)]
 pub(super) struct DraggedLayer {
+    tab: usize,
     id: LayerId,
     name: SharedString,
 }
@@ -192,6 +193,30 @@ fn thumbnail_size((width, height): (u32, u32)) -> (f32, f32) {
         (width as f32 * scale).max(1.),
         (height as f32 * scale).max(1.),
     )
+}
+
+fn layer_thumbnail(
+    thumbnail: Option<Arc<RenderImage>>,
+    dimensions: (u32, u32),
+    dimmed: bool,
+) -> Div {
+    let (width, height) = thumbnail_size(dimensions);
+    div()
+        .relative()
+        .w(px(width))
+        .h(px(height))
+        .rounded_sm()
+        .overflow_hidden()
+        .when(dimmed, |thumb| thumb.opacity(0.35))
+        .child(thumbnail_checker())
+        .when_some(thumbnail, |thumb, image| {
+            thumb.child(
+                img(image)
+                    .absolute()
+                    .size_full()
+                    .object_fit(ObjectFit::Fill),
+            )
+        })
 }
 
 pub(super) fn thumbnail_checker() -> impl IntoElement {
@@ -261,6 +286,109 @@ fn metadata_preview_blocker(
 }
 
 impl Workspace {
+    fn layer_row_interactions(
+        &self,
+        row: Stateful<Div>,
+        tab: usize,
+        id: LayerId,
+        index: usize,
+        name: SharedString,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
+        row.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+            if this.active_tab().is_some_and(|active| active.id == tab) {
+                this.select_layer(id, window, cx);
+                if event.click_count() == 2 {
+                    this.run_layer_command(LayerCommand::Rename, window, cx);
+                }
+            }
+        }))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                this.open_layer_context_menu(tab, id, event.position, window, cx);
+            }),
+        )
+        .on_drag(DraggedLayer { tab, id, name }, |dragged, _, _, cx| {
+            cx.new(|_| dragged.clone())
+        })
+        .drag_over::<DraggedLayer>(|style, _, _, _| style.border_color(rgb(ACCENT)))
+        .on_drop(
+            cx.listener(move |this, dragged: &DraggedLayer, window, cx| {
+                if dragged.tab == tab && this.active_tab().is_some_and(|active| active.id == tab) {
+                    this.move_layer(dragged.id, index, window, cx);
+                }
+            }),
+        )
+    }
+
+    fn layer_visibility_button(
+        &self,
+        tab: usize,
+        id: LayerId,
+        visible: bool,
+        compact: bool,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
+        let enabled =
+            self.pdf_job.is_none() && self.layer_command_enabled(LayerCommand::ToggleVisibility);
+        let button = div()
+            .id((
+                if compact {
+                    "compact-layer-eye"
+                } else {
+                    "layer-visibility"
+                },
+                id.0 as usize,
+            ))
+            .size(px(if compact { 22. } else { 24. }))
+            .flex_shrink_0()
+            .rounded_sm()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(rgb(if visible { MUTED } else { DISABLED }))
+            .when(compact, |button| {
+                button.absolute().right_0().bottom_0().bg(rgb(CHROME))
+            })
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .tooltip(tooltip(
+                if self.layer_metadata_preview_blocker().is_some() {
+                    "Apply or cancel the current canvas edit before changing visibility"
+                } else if visible {
+                    "Hide layer"
+                } else {
+                    "Show layer"
+                },
+            ))
+            .when_else(
+                enabled,
+                |button| {
+                    button
+                        .cursor_pointer()
+                        .hover(|button| button.bg(rgb(HOVER)).text_color(rgb(TEXT)))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.edit_layer_metadata(
+                                tab,
+                                id,
+                                LayerCommand::ToggleVisibility,
+                                window,
+                                cx,
+                            );
+                        }))
+                },
+                |button| button.opacity(0.4),
+            )
+            .child(icon(if visible { "eye" } else { "eye-off" }, 14.));
+        if compact && enabled {
+            super::compact_inspector::compact_control(button)
+        } else {
+            button
+        }
+    }
+
     pub(super) fn layer_metadata_preview_blocker(&self) -> Option<&'static str> {
         if self.selection_drag.is_some() && self.numeric_edit.is_none() {
             return Some("selection");
@@ -279,7 +407,9 @@ impl Workspace {
     pub(super) fn refuse_layer_metadata_preview(&mut self, cx: &mut Context<Self>) -> bool {
         if let Some(edit) = self.layer_metadata_preview_blocker() {
             self.notice(
-                &format!("Apply or cancel the current {edit} before changing layer controls."),
+                &format!(
+                    "Apply or cancel the current {edit} before changing layer or path controls."
+                ),
                 cx,
             );
             return true;
@@ -301,6 +431,7 @@ impl Workspace {
                 | LayerCommand::Link
                 | LayerCommand::DetachShadow
                 | LayerCommand::AttachAbove
+                | LayerCommand::ToggleVisibility
         ) && self.layer_metadata_preview_blocker().is_some()
         {
             return false;
@@ -453,7 +584,6 @@ impl Workspace {
         let tab_id = tab.id;
         let content = &tab.document.content;
         let index = content.layer_index(id).unwrap_or_default();
-        let visible = content.layer(id).is_some_and(|layer| layer.visible);
         match command {
             LayerCommand::EditEffect => self.edit_retained_layer_effect(window, cx),
             LayerCommand::RemoveEffect | LayerCommand::BakeEffect => self.edit_content(
@@ -492,7 +622,8 @@ impl Workspace {
             | LayerCommand::PositionLock
             | LayerCommand::Link
             | LayerCommand::DetachShadow
-            | LayerCommand::AttachAbove => {
+            | LayerCommand::AttachAbove
+            | LayerCommand::ToggleVisibility => {
                 self.edit_layer_metadata(tab_id, id, command, window, cx);
             }
             LayerCommand::New => self.new_layer_form(window, cx),
@@ -550,17 +681,6 @@ impl Workspace {
                     cx,
                 );
             }
-            LayerCommand::ToggleVisibility => self.edit_content(
-                move |content, _, _| {
-                    if content.set_visible(id, !visible) {
-                        content.layer_composite_dirty(id)
-                    } else {
-                        Dirty::None
-                    }
-                },
-                window,
-                cx,
-            ),
             LayerCommand::Raise => self.move_layer(id, index + 1, window, cx),
             LayerCommand::Lower => {
                 self.move_layer(id, index.saturating_sub(1), window, cx);
@@ -642,6 +762,7 @@ impl Workspace {
                     | LayerCommand::Link
                     | LayerCommand::DetachShadow
                     | LayerCommand::AttachAbove
+                    | LayerCommand::ToggleVisibility
             )
         {
             return;
@@ -672,6 +793,21 @@ impl Workspace {
         let Some(layer) = self.active_document().and_then(|doc| doc.content.layer(id)) else {
             return;
         };
+        if command == LayerCommand::ToggleVisibility {
+            let visible = !layer.visible;
+            self.edit_content(
+                move |content, _, _| {
+                    if content.set_visible(id, visible) {
+                        content.layer_composite_dirty(id)
+                    } else {
+                        Dirty::None
+                    }
+                },
+                window,
+                cx,
+            );
+            return;
+        }
         if matches!(
             command,
             LayerCommand::Link | LayerCommand::DetachShadow | LayerCommand::AttachAbove
@@ -704,27 +840,6 @@ impl Workspace {
         self.cancel_move(window, cx);
         self.edit_content(
             move |content, _, _| content.set_layer_locks(id, locks),
-            window,
-            cx,
-        );
-    }
-
-    fn toggle_visibility(&mut self, id: LayerId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(visible) = self
-            .active_document()
-            .and_then(|document| document.content.layer(id))
-            .map(|layer| layer.visible)
-        else {
-            return;
-        };
-        self.edit_content(
-            move |content, _, _| {
-                if content.set_visible(id, !visible) {
-                    content.layer_composite_dirty(id)
-                } else {
-                    Dirty::None
-                }
-            },
             window,
             cx,
         );
@@ -840,7 +955,6 @@ impl Workspace {
                     let active = id == tab.active_layer;
                     let visible = layer.visible;
                     let name: SharedString = layer.name.clone().into();
-                    let (width, height) = thumbnail_size(layer.pixels.dimensions());
                     let mut detail = if visible {
                         "Visible".to_owned()
                     } else {
@@ -863,106 +977,45 @@ impl Workspace {
                     {
                         detail.push_str(&format!(" · Follows {}", source.name));
                     }
-                    div()
-                        .id(("compact-layer", id.0 as usize))
-                        .group("compact-layer")
-                        .relative()
-                        .w_full()
-                        .h(px(44.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(rgb(if active { ACCENT } else { BORDER }))
-                        .bg(rgb(if active { SELECTED } else { CHROME }))
-                        .hover(|row| row.bg(rgb(HOVER)))
-                        .cursor_pointer()
-                        .tooltip(tooltip(format!("{name}\n{detail}")))
-                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                            if this.active_tab().is_some_and(|tab| tab.id == tab_id) {
-                                this.select_layer(id, window, cx);
-                                if event.click_count() == 2 {
-                                    this.run_layer_command(LayerCommand::Rename, window, cx);
-                                }
-                            }
-                        }))
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                this.open_layer_context_menu(
-                                    tab_id,
-                                    id,
-                                    event.position,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        )
-                        .on_drag(
-                            DraggedLayer {
-                                id,
-                                name: name.clone(),
-                            },
-                            |dragged, _, _, cx| cx.new(|_| dragged.clone()),
-                        )
-                        .drag_over::<DraggedLayer>(|row, _, _, _| row.border_color(rgb(ACCENT)))
-                        .on_drop(
-                            cx.listener(move |this, dragged: &DraggedLayer, window, cx| {
-                                if this.active_tab().is_some_and(|tab| tab.id == tab_id) {
-                                    this.move_layer(dragged.id, index, window, cx);
-                                }
-                            }),
-                        )
-                        .child(
+                    self.layer_row_interactions(
+                        super::compact_inspector::compact_control(
                             div()
+                                .id(("compact-layer", id.0 as usize))
+                                .group("compact-layer")
                                 .relative()
-                                .w(px(width))
-                                .h(px(height))
-                                .overflow_hidden()
-                                .when(!visible, |thumb| thumb.opacity(0.35))
-                                .child(thumbnail_checker())
-                                .when_some(
-                                    tab.document.canvas.thumbnail(id).cloned(),
-                                    |thumb, image| {
-                                        thumb.child(
-                                            img(image)
-                                                .absolute()
-                                                .size_full()
-                                                .object_fit(ObjectFit::Fill),
-                                        )
-                                    },
-                                ),
-                        )
-                        .child(
-                            div()
-                                .id(("compact-layer-eye", id.0 as usize))
-                                .absolute()
-                                .right_0()
-                                .bottom_0()
-                                .size(px(22.))
-                                .rounded_sm()
+                                .w_full()
+                                .h(px(44.))
+                                .flex_shrink_0()
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .bg(rgb(CHROME))
-                                .text_color(rgb(MUTED))
-                                .when(!active && visible, |eye| {
-                                    eye.invisible()
-                                        .group_hover("compact-layer", |eye| eye.visible())
-                                })
-                                .hover(|eye| eye.bg(rgb(HOVER)).text_color(rgb(TEXT)))
-                                .tooltip(tooltip(if visible { "Hide layer" } else { "Show layer" }))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    if this.active_tab().is_some_and(|tab| tab.id == tab_id) {
-                                        this.toggle_visibility(id, window, cx);
-                                    }
-                                }))
-                                .child(icon(if visible { "eye" } else { "eye-off" }, 13.)),
-                        )
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(rgb(if active { ACCENT } else { BORDER }))
+                                .bg(rgb(if active { SELECTED } else { CHROME }))
+                                .hover(|row| row.bg(rgb(HOVER)))
+                                .cursor_pointer()
+                                .tooltip(tooltip(format!("{name}\n{detail}"))),
+                        ),
+                        tab_id,
+                        id,
+                        index,
+                        name.clone(),
+                        cx,
+                    )
+                    .child(layer_thumbnail(
+                        tab.document.canvas.thumbnail(id).cloned(),
+                        layer.pixels.dimensions(),
+                        !visible,
+                    ))
+                    .child(
+                        self.layer_visibility_button(tab_id, id, visible, true, cx)
+                            .when(!active && visible, |eye| {
+                                eye.invisible()
+                                    .group_hover("compact-layer", |eye| eye.visible())
+                                    .focus(|eye| eye.visible().border_color(rgb(ACCENT)))
+                            }),
+                    )
                 },
             ))
             .child(self.compact_new_layer_button())
@@ -1006,8 +1059,7 @@ impl Workspace {
                 name.clone()
             };
             let thumbnail = tab.document.canvas.thumbnail(id).cloned();
-            let (thumbnail_width, thumbnail_height) = thumbnail_size(layer.pixels.dimensions());
-            div()
+            self.layer_row_interactions(div()
                 .id(("layer", id.0 as usize))
                 .flex()
                 .items_center()
@@ -1019,29 +1071,7 @@ impl Workspace {
                 .bg(rgb(if active { SELECTED } else { CHROME }))
                 .cursor_pointer()
                 .hover(|row| row.bg(rgb(HOVER)))
-                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                    this.select_layer(id, window, cx);
-                    if event.click_count() == 2 {
-                        this.run_layer_command(LayerCommand::Rename, window, cx);
-                    }
-                }))
-                .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.open_layer_context_menu(tab_id, id, event.position, window, cx);
-                }))
-                .on_drag(
-                    DraggedLayer {
-                        id,
-                        name: name.clone(),
-                    },
-                    |dragged, _, _, cx| cx.new(|_| dragged.clone()),
-                )
-                .drag_over::<DraggedLayer>(|style, _, _, _| style.border_color(rgb(ACCENT)))
-                .on_drop(
-                    cx.listener(move |this, dragged: &DraggedLayer, window, cx| {
-                        this.move_layer(dragged.id, index, window, cx);
-                    }),
-                )
+            , tab_id, id, index, name.clone(), cx)
                 .child(
                     div()
                         .size(px(THUMBNAIL_EDGE))
@@ -1050,21 +1080,7 @@ impl Workspace {
                         .items_center()
                         .justify_center()
                         .child(
-                            div()
-                                .relative()
-                                .w(px(thumbnail_width))
-                                .h(px(thumbnail_height))
-                                .rounded_sm()
-                                .overflow_hidden()
-                                .child(thumbnail_checker())
-                                .when_some(thumbnail, |frame, image| {
-                                    frame.child(
-                                        img(image)
-                                            .absolute()
-                                            .size_full()
-                                            .object_fit(ObjectFit::Fill),
-                                    )
-                                }),
+                            layer_thumbnail(thumbnail, layer.pixels.dimensions(), false),
                         ),
                 )
                 .child(
@@ -1107,26 +1123,7 @@ impl Workspace {
                                 .child(icon("link", 14.)),
                         )
                         .child(
-                            div()
-                                .id(("layer-visibility", id.0 as usize))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .size(px(24.))
-                                .flex_shrink_0()
-                                .rounded_sm()
-                                .text_color(rgb(if layer.visible { MUTED } else { DISABLED }))
-                                .hover(|button| button.bg(rgb(HOVER)).text_color(rgb(TEXT)))
-                                .tooltip(tooltip(if layer.visible {
-                                    "Hide layer"
-                                } else {
-                                    "Show layer"
-                                }))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    this.toggle_visibility(id, window, cx);
-                                }))
-                                .child(icon(if layer.visible { "eye" } else { "eye-off" }, 14.)),
+                            self.layer_visibility_button(tab_id, id, layer.visible, false, cx),
                         )
                         .child(
                             div().id(("lock-position", id.0 as usize))

@@ -2,8 +2,8 @@
 title: "Find your way around Lime"
 description: "Find the toolbox, canvas, Tool Options, Layers, Paths, and workspace controls."
 translationKey: "start/workspace"
-sourceRevision: "1.2.3-guide-6"
-translatedRevision: "1.2.3-guide-6"
+sourceRevision: "1.2.3-guide-8"
+translatedRevision: "1.2.3-guide-8"
 ---
 
 ## Read the workspace {#layout}
@@ -27,9 +27,11 @@ The screenshot shows Lime's desktop workspace. Panel sizes and the selected tool
 
 Lime remembers personal folding choices. Tabs keep their own zoom and pan. A folded sidebar retains the selected Layers/Paths tab and drafts.
 
-The compact sidebar matches the folded toolbox width. It keeps essential tool controls at the top, layer thumbnails in the larger middle section, and path blocks below. Each section scrolls independently without a visible scrollbar; subtle edge fades indicate more content. Use **Return** to apply or **Escape** to cancel Crop, Gradient, and transform previews; when editing a numeric field, these keys finish or restore that field first. Click the current tool heading to expand all options. Move's alignment buttons place the layer at a canvas edge or center. Flip uses an **H/V** toggle. Gradient's single color-mode button toggles between **F→B** (foreground to background) and **F→A** (foreground to transparent). Text offers size and a clickable color swatch.
+The compact sidebar matches the folded toolbox width. It keeps essential tool controls at the top, layer thumbnails in the larger middle section, and path blocks below. Each section scrolls independently without a visible scrollbar; subtle edge fades indicate more content. Use **Return** on the canvas to apply or **Escape** to cancel Crop, Gradient, and transform previews; when editing a numeric field, these keys finish or restore that field first. Click the current tool heading to expand all options. Move shows two vertically stacked buttons: **Center Horizontally** and **Center Vertically**. When no image is open, every tool keeps its heading and hides its compact controls. Flip uses an **H/V** toggle. Gradient's single color-mode button toggles between **F→B** (foreground to background) and **F→A** (foreground to transparent). Text offers size and a clickable color swatch.
 
 Use **+** immediately after the last layer thumbnail to open the New Layer dialog. It scrolls with the list and appears only when an image is open. Click a layer thumbnail to select it, double-click to rename, right-click for its context menu, or drag to reorder it. Hover for its name and status. An eye appears on the active or hidden layer and when hovering over other thumbnails. Click the empty area of a path block to select it; its eye shows or hides the path without changing the selected path. Hover for the path number and anchor count. Compact and expanded panels remember their own scroll positions.
+
+Use **Tab/Shift+Tab** to focus compact buttons and **Return/Space** to activate them. On a numeric field, Return/Space starts editing; Return finishes the edit and Escape restores it. Hover a shortened value to see it in full. Long numeric edits scroll to keep the caret visible. The Path tool’s **Stroke** button immediately uses the current stroke settings. Apply or cancel a canvas preview before changing layer or path visibility.
 
 ## Use the menus {#menus}
 
