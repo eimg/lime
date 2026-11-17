@@ -1008,7 +1008,7 @@ Grow/Shrink use linear-time running max/min filters to preserve soft coverage.
   `src/workspace/text_ui.rs` edits that draft, commits it when the session
   ends, and draws the font picker and style options. Text sprites apply the
   document color mode before display, including intrinsic RGB from color fonts.
-- `src/project.rs` reads project versions 6 through 10 and applies the same size limits
+- `src/project.rs` reads project versions 6 through 11 and applies the same size limits
   in both directions. Any layer lock requires version 8 with an optional per-layer
   `locks` object. Missing flags default to false; unlocked layers omit the object.
   Without version 9 metadata or locks, projects containing guides write version 7; without guides

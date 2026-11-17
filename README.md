@@ -11,16 +11,16 @@ Layers, painting, selections, text, and effects in a workspace that puts your ca
 
 ## Download
 
-**Lime 1.3.0** · [Release notes](https://github.com/eimg/lime/releases/tag/v1.3.0)
+**Lime 1.3.1** · [Release notes](https://github.com/eimg/lime/releases/tag/v1.3.1)
 
 | Platform | Download | Install |
 | --- | --- | --- |
-| Windows x64 | [EXE](https://github.com/eimg/lime/releases/download/v1.3.0/Lime-1.3.0-windows-x64.exe) | Download and run. No installer. |
-| macOS (Apple silicon) | [DMG](https://github.com/eimg/lime/releases/download/v1.3.0/Lime-1.3.0.dmg) | Open and drag Lime to Applications. |
-| Linux x86_64 | [tar.gz](https://github.com/eimg/lime/releases/download/v1.3.0/Lime-1.3.0-linux-x86_64.tar.gz) | Extract and run `./lime`. |
-| Linux ARM64 | [tar.gz](https://github.com/eimg/lime/releases/download/v1.3.0/Lime-1.3.0-linux-aarch64.tar.gz) | Extract and run `./lime`. |
+| Windows x64 | [EXE](https://github.com/eimg/lime/releases/download/v1.3.1/Lime-1.3.1-windows-x64.exe) | Download and run. No installer. |
+| macOS (Apple silicon) | [DMG](https://github.com/eimg/lime/releases/download/v1.3.1/Lime-1.3.1.dmg) | Open and drag Lime to Applications. |
+| Linux x86_64 | [tar.gz](https://github.com/eimg/lime/releases/download/v1.3.1/Lime-1.3.1-linux-x86_64.tar.gz) | Extract and run `./lime`. |
+| Linux ARM64 | [tar.gz](https://github.com/eimg/lime/releases/download/v1.3.1/Lime-1.3.1-linux-aarch64.tar.gz) | Extract and run `./lime`. |
 
-[SHA-256 checksums](https://github.com/eimg/lime/releases/download/v1.3.0/SHA256SUMS)
+[SHA-256 checksums](https://github.com/eimg/lime/releases/download/v1.3.1/SHA256SUMS.txt)
 
 Windows requires Windows 10 or later, DirectX, and the Microsoft Visual C++
 2015–2022 x64 runtime. Linux requires glibc 2.35 or newer, a working Vulkan driver,
