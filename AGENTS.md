@@ -576,7 +576,10 @@ same insertion point. Editing existing text preserves its layer order. A click w
 a few screen points of a text box still edits that text. A dashed frame marks
 the text being edited, and the caret blinks. Typing, Return, the
 arrow keys, and the text clipboard edit the draft and show it on the canvas at
-once. Dragging, Shift-click, or Shift+arrows select partial ranges across lines.
+once. Double-click selects a Unicode word; triple-click selects the visible line, including
+wrapped lines. Repeated clicks retain their selection on release and across pending
+caret-layout completion; edits/navigation invalidate stale pending clicks. Dragging,
+Shift-click, or Shift+arrows select partial ranges across lines.
 Copy/Cut use the range and typing/Paste replace it. Option+Left/Right and
 Option+Backspace/Delete on macOS (Ctrl on Windows) navigate/delete by Unicode
 word boundaries; Shift extends those selections. Normal moves/deletes use
@@ -589,8 +592,8 @@ Pointer selection uses the latest matching caret map;
 late layout may resolve a released drag, but edits/navigation invalidate its
 old pending hit. Deactivation ends a pointer drag. Modified navigation in the
 font filter remains in that filter and cannot affect canvas text. Styles
-apply to selected text, new typing at the caret, or all text when a layer is selected
-without a caret. Spacing and layout stay layer-wide. Text entry uses key events
+apply to highlighted text, or the whole active text draft/layer when nothing is
+highlighted, including while typing. Empty drafts retain styles for their first text. Spacing and layout stay layer-wide. Text entry uses key events
 and clipboard text;
 native IME composition is not supported. Native Edit menu actions and Undo/Redo
 step through typing first, then fall through to image history. There is no Apply or Discard: Escape,
@@ -1490,7 +1493,7 @@ app backups, and project build caches can be removed when cleanup is requested.
   uniform legacy content still uses the oldest applicable format. Invalid/gapped/
   overlapping or non-grapheme ranges are rejected. Character controls show Mixed
   for differing properties and name their target: All text, Selected text, or New
-  typing. Caret movement resets the insertion style; following text owns a clicked
+  text for an empty draft. A caret alone never restricts formatting to future typing. Caret movement resets the insertion style; following text owns a clicked
   boundary, preceding text owns upstream affinity. Numeric size cancellation restores
   the full field-start style state. Plain paste inherits the insertion style; verified
   Lime clipboard metadata retains formatting. Grayscale conversion constrains every

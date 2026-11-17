@@ -1503,6 +1503,7 @@ impl Workspace {
                                     event.position,
                                     window.scale_factor(),
                                     event.modifiers.shift,
+                                    event.click_count,
                                     window,
                                     cx,
                                 );

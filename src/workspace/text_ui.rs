@@ -175,7 +175,7 @@ pub(super) struct TextCaret {
 pub(super) struct TextDraft {
     runs: Vec<text::StyleRun>,
     insertion: Option<text::CharacterStyle>,
-    all_text: bool,
+    layer_selected: bool,
     tab: usize,
     generation: u64,
     above: LayerId,
@@ -198,6 +198,7 @@ pub(super) struct TextDraft {
     // A click that opened this draft places the caret once the layout is known.
     pending_hit: Option<(f32, f32)>,
     pending_extend: bool,
+    pending_click_count: usize,
     pending_drag_hit: Option<(f32, f32)>,
     dragging: bool,
     baseline: Arc<text::RenderedText>,
@@ -210,7 +211,7 @@ pub(super) struct TextDraft {
 pub(super) struct TextEdit {
     runs: Vec<text::StyleRun>,
     insertion: Option<text::CharacterStyle>,
-    all_text: bool,
+    layer_selected: bool,
     source: String,
     cursor: usize,
     cursor_affinity: CaretAffinity,
@@ -305,7 +306,7 @@ impl TextDraft {
         }
         self.cursor = byte;
         self.insertion = None;
-        self.all_text = false;
+        self.layer_selected = false;
         self.cursor_affinity = CaretAffinity::Downstream;
     }
 
@@ -448,7 +449,7 @@ impl TextDraft {
     fn target_styles(&self) -> Vec<text::CharacterStyle> {
         if let Some(range) = self.selected_range() {
             self.spec().styles_in(range)
-        } else if self.all_text {
+        } else if !self.source.is_empty() {
             self.spec().styles_in(0..self.source.len())
         } else {
             vec![self.current_style()]
@@ -458,7 +459,7 @@ impl TextDraft {
     fn format(&mut self, change: impl Fn(&mut text::CharacterStyle)) -> bool {
         if let Some(range) = self
             .selected_range()
-            .or_else(|| self.all_text.then_some(0..self.source.len()))
+            .or_else(|| (!self.source.is_empty()).then_some(0..self.source.len()))
         {
             let mut spec = self.spec();
             spec.format_range(range, &change);
@@ -495,7 +496,7 @@ impl TextDraft {
                 .find(|i| *i >= cursor)
                 .unwrap_or(self.source.len());
         self.selection_anchor = None;
-        self.all_text = false;
+        self.layer_selected = false;
         self.insertion = Some(if runs.is_empty() {
             style
         } else {
@@ -525,14 +526,26 @@ impl TextDraft {
         self.dragging
     }
 
+    fn apply_pointer_hit(&mut self, point: (f32, f32), extend: bool, click_count: usize) {
+        if click_count >= 2 {
+            if let Some(range) = self
+                .carets
+                .click_selection(point.0, point.1, click_count >= 3)
+            {
+                self.move_to(range.start, false);
+                self.move_to_position((range.end, CaretAffinity::Upstream), true);
+            }
+        } else if let Some(position) = self.carets.hit_position(point.0, point.1) {
+            self.move_to_position(position, extend);
+        }
+    }
+
     fn resolve_pending_pointer(&mut self) {
         if !self.carets.matches(&self.spec()) {
             return;
         }
-        if let Some((x, y)) = self.pending_hit.take()
-            && let Some(byte) = self.carets.hit_position(x, y)
-        {
-            self.move_to_position(byte, self.pending_extend);
+        if let Some(point) = self.pending_hit.take() {
+            self.apply_pointer_hit(point, self.pending_extend, self.pending_click_count);
             if let Some((x, y)) = self.pending_drag_hit.take()
                 && let Some(byte) = self.carets.hit_position(x, y)
             {
@@ -570,7 +583,7 @@ impl TextDraft {
         TextEdit {
             runs: self.runs.clone(),
             insertion: self.insertion.clone(),
-            all_text: self.all_text,
+            layer_selected: self.layer_selected,
             source: self.source.clone(),
             cursor: self.cursor,
             cursor_affinity: self.cursor_affinity,
@@ -588,7 +601,7 @@ impl TextDraft {
     pub(super) fn restore(&mut self, state: TextEdit) {
         self.runs = state.runs;
         self.insertion = state.insertion;
-        self.all_text = state.all_text;
+        self.layer_selected = state.layer_selected;
         self.source = state.source;
         self.cursor = state.cursor;
         self.cursor_affinity = state.cursor_affinity;
@@ -857,7 +870,8 @@ impl Workspace {
     pub(super) fn text_format_target(&self) -> &'static str {
         match &self.text_draft {
             Some(draft) if draft.selected_range().is_some() => "Selected text",
-            Some(draft) if !draft.all_text => "New typing",
+            Some(draft) if !draft.source.is_empty() => "All text",
+            Some(_) => "New text",
             _ if self.selected_text_style().is_some() => "All text",
             _ => "New text",
         }
@@ -1606,7 +1620,7 @@ impl Workspace {
         self.tabs[index].pending_text = Some(TextDraft {
             runs: saved.runs,
             insertion: None,
-            all_text: false,
+            layer_selected: false,
             tab: id,
             generation: tab.history.generation(),
             above: if layer.is_none() {
@@ -1640,6 +1654,7 @@ impl Workspace {
             carets: Arc::new(CaretMap::default()),
             pending_hit: None,
             pending_extend: false,
+            pending_click_count: 1,
             pending_drag_hit: None,
             dragging: false,
             undo: Vec::new(),
@@ -1846,7 +1861,7 @@ impl Workspace {
     /// The caret and any selected text, in canvas pixels, while typing.
     pub(super) fn text_caret(&self) -> Option<TextCaret> {
         let draft = self.text_draft.as_ref()?;
-        if draft.all_text || self.active_tab().is_none_or(|tab| tab.id != draft.tab) {
+        if draft.layer_selected || self.active_tab().is_none_or(|tab| tab.id != draft.tab) {
             return None;
         }
         let (ax, ay) = (draft.anchor.0 as f32, draft.anchor.1 as f32);
@@ -1913,6 +1928,7 @@ impl Workspace {
         position: gpui::Point<gpui::Pixels>,
         scale: f32,
         extend: bool,
+        click_count: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1931,9 +1947,9 @@ impl Workspace {
             })
             .unwrap_or(SLOP)
             .max(2.0);
-        self.place_text_at(pixel, pad, extend, window, cx);
+        self.place_text_at(pixel, pad, extend, click_count, window, cx);
         if let Some(draft) = self.text_draft.as_mut() {
-            draft.dragging = true;
+            draft.dragging = click_count == 1;
         }
     }
 
@@ -1942,6 +1958,7 @@ impl Workspace {
         pixel: (i64, i64),
         pad: f32,
         extend: bool,
+        click_count: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1953,15 +1970,23 @@ impl Workspace {
         if let Some(draft) = self.text_draft.as_mut()
             && draft.contains(pixel, pad)
         {
-            if let Some(byte) = draft.hit_position(pixel) {
+            if draft.hit_position(pixel).is_some() {
                 draft.stop_pointer();
-                draft.move_to_position(byte, extend);
+                draft.apply_pointer_hit(
+                    (
+                        pixel.0 as f32 + 0.5 - draft.anchor.0 as f32,
+                        pixel.1 as f32 + 0.5 - draft.anchor.1 as f32,
+                    ),
+                    extend,
+                    click_count,
+                );
             } else {
                 draft.pending_hit = Some((
                     pixel.0 as f32 + 0.5 - draft.anchor.0 as f32,
                     pixel.1 as f32 + 0.5 - draft.anchor.1 as f32,
                 ));
                 draft.pending_extend = extend;
+                draft.pending_click_count = click_count;
                 draft.pending_drag_hit = None;
             }
             self.caret_shown_at = std::time::Instant::now();
@@ -1971,7 +1996,7 @@ impl Workspace {
         // Anywhere else finishes that text first.
         if self.finish_text(window, cx) {
             self.defer_after_text(move |this, window, cx| {
-                this.place_text_at(pixel, pad, extend, window, cx)
+                this.place_text_at(pixel, pad, extend, click_count, window, cx)
             });
             return;
         }
@@ -1995,6 +2020,10 @@ impl Workspace {
                 window,
                 cx,
             );
+            if let Some(draft) = &mut self.text_draft {
+                draft.pending_click_count = click_count;
+                draft.pending_extend = extend;
+            }
             return;
         }
         let anchor = (clamp_i32(pixel.0), clamp_i32(pixel.1));
@@ -2356,7 +2385,7 @@ impl Workspace {
         self.text_draft = Some(TextDraft {
             runs: rendered.style.runs.clone(),
             insertion: None,
-            all_text: layer.is_some() && pending_hit.is_none(),
+            layer_selected: layer.is_some() && pending_hit.is_none(),
             tab: tab.id,
             generation: tab.history.generation(),
             above: if layer.is_none() {
@@ -2384,6 +2413,7 @@ impl Workspace {
             carets: Arc::new(CaretMap::default()),
             pending_hit,
             pending_extend: false,
+            pending_click_count: 1,
             pending_drag_hit: None,
             dragging: false,
             undo: Vec::new(),
@@ -2571,7 +2601,7 @@ impl Workspace {
         {
             draft.stop_pointer();
             draft.insertion = None;
-            draft.all_text = false;
+            draft.layer_selected = false;
             draft.selection_anchor = Some(0);
             draft.cursor = draft.source.len();
             draft.cursor_affinity = CaretAffinity::Downstream;
@@ -2756,7 +2786,7 @@ mod mixed_style_tests {
         let mut draft = TextDraft {
             runs: Vec::new(),
             insertion: None,
-            all_text: false,
+            layer_selected: false,
             tab: 1,
             generation: 0,
             above: LayerId(1),
@@ -2778,6 +2808,7 @@ mod mixed_style_tests {
             carets: Arc::new(CaretMap::default()),
             pending_hit: None,
             pending_extend: false,
+            pending_click_count: 1,
             pending_drag_hit: None,
             dragging: false,
             baseline: rendered,
@@ -2805,12 +2836,45 @@ mod mixed_style_tests {
         draft.restore(before_numeric);
         assert_eq!(draft.spec(), formatted);
         draft.move_to(7, false);
+        let before_size = draft.state();
+        assert!(draft.format(|style| style.size = 72.));
+        assert!(draft.target_styles().iter().all(|style| style.size == 72.));
+        assert!(!draft.spec().style_at(0).face.bold);
+        assert!(draft.spec().style_at(4).face.bold);
+        assert_eq!(draft.cursor, 7);
+        assert_eq!(draft.selection_anchor, None);
+        draft.record(before_size);
+        assert!(draft.step_history(false));
+        assert_eq!(draft.spec(), formatted);
+        assert!(draft.step_history(true));
+        let before_numeric = draft.state();
+        draft.format(|style| style.size = 150.);
+        draft.restore(before_numeric);
+        assert!(draft.target_styles().iter().all(|style| style.size == 72.));
         draft.format(|style| style.color = [255, 0, 0, 255]);
-        assert_eq!(draft.spec(), formatted); // insertion-only format has no pixel edit
+        assert!(
+            draft
+                .target_styles()
+                .iter()
+                .all(|style| style.color == [255, 0, 0, 255])
+        );
         draft.replace_selection("!");
         assert_eq!(draft.spec().style_at(7).color, [255, 0, 0, 255]);
-        assert_eq!(draft.spec().style_at(4).color, spec.color.0);
+        assert_eq!(draft.spec().style_at(4).color, [255, 0, 0, 255]);
+        assert_eq!(draft.spec().style_at(7).size, 72.);
         assert!(draft.spec().style_at(7).face.bold);
+        // A released double/triple click must survive the asynchronous caret-map handoff.
+        draft.carets = Arc::new(text::caret_map(&draft.spec()).unwrap());
+        let word = draft.carets.at(4).unwrap();
+        draft.pending_hit = Some((word.x + 1., word.top + 1.));
+        draft.pending_click_count = 2;
+        draft.end_pointer_drag();
+        draft.resolve_pending_pointer();
+        assert_eq!(draft.selected_range(), Some(4..7));
+        draft.pending_hit = Some((word.x + 1., word.top + 1.));
+        draft.pending_click_count = 3;
+        draft.resolve_pending_pointer();
+        assert_eq!(draft.selected_range(), Some(0..8));
         let signature = draft.recovery_signature();
         assert_eq!(signature.spec, draft.spec());
         let mut content = document::DocumentContent::single_layer(

@@ -2,15 +2,15 @@
 title: "Text၊ Drop Shadow နှင့် Outline ထည့်ရန်"
 description: "Text ကို ဆက်ပြင်နိုင်အောင် ထားပြီး သီးခြား Drop Shadow သို့မဟုတ် Outline ထည့်နည်း။"
 translationKey: guides/text-effects
-sourceRevision: "text-styles-1"
-translatedRevision: "text-styles-1"
+sourceRevision: "text-styles-2"
+translatedRevision: "text-styles-2"
 ---
 
 ## Editable Text ထည့်ရန် {#steps}
 
 1. **Text** (`T`) ရွေးပြီး Canvas ၏ လွတ်နေသောနေရာတွင် Click လုပ်ပါ။ မည်သည့် Layer ကို ရွေးထားသည်ဖြစ်စေ Text အသစ်က Layer အားလုံး၏ အပေါ်ဆုံးတွင် ပေါ်သည်။ ရှိပြီးသား Text ကို Click လုပ်လျှင် ၎င်း၏ လက်ရှိ Layer အစီအစဉ်အတိုင်း ပြင်သည်။
 2. စာရိုက်ပါ သို့မဟုတ် Paste လုပ်ပါ။ Return က စာကြောင်းအသစ်ထည့်သည်။ Native composition လိုအပ်သော Input method အတွက် အခြား App တွင် စာရေးပြီး Lime ထဲ Paste လုပ်ပါ။
-3. **Tool Options** တွင် ထည့်သွင်းထားသော Font၊ Size၊ Color၊ Bold/Italic၊ Spacing နှင့် Alignment ရွေးပါ။ Font၊ Size၊ Color၊ Bold နှင့် Italic က Highlight လုပ်ထားသော စာသားကိုသာ ပြောင်းသည်။ Caret သာရှိလျှင် နောက်ရိုက်မည့်စာ၏ Style ကို သတ်မှတ်သည်။ Layer တစ်ခုလုံး ပြောင်းရန် Caret မချဘဲ Layers တွင် ရွေးပါ၊ သို့မဟုတ် စာပြင်နေစဉ် Cmd/Ctrl+A နှိပ်ပါ။ Spacing နှင့် Alignment က Layer တစ်ခုလုံးကို အမြဲသက်ရောက်သည်။
+3. **Tool Options** တွင် ထည့်သွင်းထားသော Font၊ Size၊ Color၊ Bold/Italic၊ Spacing နှင့် Alignment ရွေးပါ။ Font၊ Size၊ Color၊ Bold နှင့် Italic က Highlight လုပ်ထားသော စာသားကိုသာ ပြောင်းသည်။ စာသား Highlight မလုပ်ထားလျှင် စာရိုက်နေစဉ်မှာပင် လက်ရှိ Text Layer တစ်ခုလုံးကို ချက်ချင်းပြောင်းသည်။ စကားလုံးရွေးရန် Double-click လုပ်ပါ။ မြင်နေရသော စာတစ်ကြောင်းရွေးရန် Triple-click လုပ်ပါ။ စာခေါက်ထားလျှင် မြင်ရသော တစ်ကြောင်းချင်းစီကိုသာ ရွေးသည်။ Spacing နှင့် Alignment က Layer တစ်ခုလုံးကို အမြဲသက်ရောက်သည်။
 4. Box အတွင်း စာခေါက်ရန် **Fixed box** ဖွင့်ပါ။ ထို့နောက် Width/Height ပြင်နိုင်သည်။ Overflow notice ပေါ်လျှင် စာအချို့ Box အပြင်ရောက်နေသည်။ ပိုမြင်ရန် Box ချဲ့ပါ၊ သို့မဟုတ် ကန့်သတ်ချက်ဖယ်ရန် Fixed box ပိတ်ပါ။
 5. အပြင်ကို Click လုပ်ပါ၊ သို့မဟုတ် Cmd/Ctrl+Enter နှိပ်ပါ။ Escape လည်း Text draft ကို Commit လုပ်ပြီး စာရိုက်မှုကို မပယ်ဖျက်ပါ။ ပြန်ယူရန် **Edit → Undo** သုံးပါ။
 

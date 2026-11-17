@@ -2,13 +2,13 @@
 title: "Text၊ Export နှင့် Recovery ပြဿနာများ"
 description: "Font မရှိခြင်း၊ Flattened Export၊ PDF ကန့်သတ်ချက်နှင့် Session ပြတ်တောက်ခြင်းကို ဖြေရှင်းနည်း။"
 translationKey: troubleshooting/files-text-recovery
-sourceRevision: "text-styles-1"
-translatedRevision: "text-styles-1"
+sourceRevision: "text-styles-2"
+translatedRevision: "text-styles-2"
 ---
 
 ## Text ပုံစံကွာခြားခြင်း သို့မဟုတ် ဖြတ်နေခြင်း {#text}
 
-သတ်မှတ်ထားသော Font မရှိလျှင် အစားထိုးသုံးသည်။ Lime ၏ Notice ကို စစ်ပြီး ရှိသော Font ရွေးပါ။ မူရင်း Font သုံးရန် Project Save လုပ်ပြီး Font ထည့်ပါ။ Lime ကို ပိတ်၍ ပြန်ဖွင့်ပါ။ Project ပြန်ဖွင့်ပြီးမှ Text ပြင်ပါ။ App က လက်ရှိ Session အတွက် Font list ကို Cache လုပ်ထားသည်။ Text controls အပေါ်ရှိ **All text**၊ **Selected text** သို့မဟုတ် **New typing** က မည်သည့်စာသားကို ပြောင်းမည်ကို ပြသည်။ စာသားအပိုင်းကို Highlight လုပ်ပြီး ၎င်း၏ Font၊ Size၊ Color၊ Bold သို့မဟုတ် Italic ကို သီးခြားပြောင်းနိုင်သည်။ **Mixed** ဆိုသည်မှာ ရွေးထားသောစာသားတွင် တန်ဖိုးမတူညီခြင်း ဖြစ်သည်။ တစ်ခုကိုပြောင်းလျှင် ကျန် Style များ မပြောင်းပါ။
+သတ်မှတ်ထားသော Font မရှိလျှင် အစားထိုးသုံးသည်။ Lime ၏ Notice ကို စစ်ပြီး ရှိသော Font ရွေးပါ။ မူရင်း Font သုံးရန် Project Save လုပ်ပြီး Font ထည့်ပါ။ Lime ကို ပိတ်၍ ပြန်ဖွင့်ပါ။ Project ပြန်ဖွင့်ပြီးမှ Text ပြင်ပါ။ App က လက်ရှိ Session အတွက် Font list ကို Cache လုပ်ထားသည်။ Text controls အပေါ်ရှိ **All text**၊ **Selected text** သို့မဟုတ် စာမရှိသေးလျှင် **New text** က မည်သည့်စာသားကို ပြောင်းမည်ကို ပြသည်။ Highlight မရှိလျှင် စာရိုက်နေစဉ်မှာပင် လက်ရှိ Text အားလုံးကို ပြောင်းသည်။ စကားလုံးကို Double-click၊ မြင်ရသော စာတစ်ကြောင်းကို Triple-click၊ သို့မဟုတ် စာသားပေါ် Drag လုပ်ပြီး ရွေးပါ။ ထို့နောက် ၎င်း၏ Font၊ Size၊ Color၊ Bold သို့မဟုတ် Italic ကို သီးခြားပြောင်းနိုင်သည်။ **Mixed** ဆိုသည်မှာ ရွေးထားသောစာသားတွင် တန်ဖိုးမတူညီခြင်း ဖြစ်သည်။ တစ်ခုကိုပြောင်းလျှင် ကျန် Style များ မပြောင်းပါ။
 
 **Fixed box** ဖွင့်လျှင် Width/Height ပြင်နိုင်ပြီး ထိုအရွယ်အတွင်း စာခေါက်သည်။ Box အပြင်ရောက်သော Text ကို ဖြတ်ထားသည်။ Overflow ပြလျှင် Width/Height တိုးပါ၊ သို့မဟုတ် ကန့်သတ်ချက်ဖယ်ရန် Fixed box ပိတ်ပါ။ Source Text က ကျန်နေသည်။ Native input-method composition မရသဖြင့် အခြား App တွင် စာရေးပြီး Lime ထဲ Paste လုပ်ပါ။
 

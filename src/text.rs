@@ -620,6 +620,65 @@ impl CaretMap {
             .map(|stop| self.position(*stop))
     }
 
+    /// Select a Unicode word (including punctuation/whitespace on their own),
+    /// or one visual line. Use the hit grapheme rather than the nearest caret,
+    /// so the right half of a word's final letter still selects that word.
+    pub fn click_selection(
+        &self,
+        x: f32,
+        y: f32,
+        whole_line: bool,
+    ) -> Option<std::ops::Range<usize>> {
+        use unicode_segmentation::UnicodeSegmentation;
+        let source = &self.spec.as_ref()?.source;
+        let (byte, affinity) = self.hit_position(x, y)?;
+        let line = self.at_affinity(byte, affinity)?.line;
+        let mut stops = self.stops.iter().filter(|stop| stop.line == line);
+        let first = stops.next()?;
+        let (start, end) = stops.fold((first.byte, first.byte), |(start, end), stop| {
+            (start.min(stop.byte), end.max(stop.byte))
+        });
+        if whole_line {
+            return Some(start..end);
+        }
+        let byte = self
+            .stops
+            .windows(2)
+            .find(|pair| {
+                pair[0].line == line
+                    && pair[1].line == line
+                    && pair[0].byte < pair[1].byte
+                    && x >= pair[0].x.min(pair[1].x)
+                    && x < pair[0].x.max(pair[1].x)
+            })
+            .map_or_else(
+                || byte.min(end.saturating_sub(1)).max(start),
+                |pair| pair[0].byte,
+            );
+        let (start, word) = source
+            .split_word_bound_indices()
+            .find(|(start, word)| *start <= byte && byte < start + word.len())?;
+        let end = start + word.len();
+        let mut boundaries = source
+            .grapheme_indices(true)
+            .map(|(i, _)| i)
+            .chain(std::iter::once(source.len()));
+        let start = boundaries
+            .by_ref()
+            .take_while(|i| *i <= start)
+            .last()
+            .unwrap_or(0);
+        // Word boundaries normally already coincide with graphemes; explicitly
+        // align them to keep malformed or unusual combining sequences intact.
+        let end = source
+            .grapheme_indices(true)
+            .map(|(i, _)| i)
+            .chain(std::iter::once(source.len()))
+            .find(|i| *i >= end)
+            .unwrap_or(source.len());
+        Some(start..end)
+    }
+
     pub fn line_edge_position(
         &self,
         byte: usize,
@@ -956,6 +1015,59 @@ mod tests {
             color: Rgba([0, 0, 0, 255]),
             spacing,
         }
+    }
+
+    #[test]
+    fn repeated_clicks_select_words_and_visual_lines_without_splitting_graphemes() {
+        let mut spec = spec("Hello, world!\n👩‍💻 e\u{301}", Spacing::default());
+        spec.format_range(7..12, |style| style.size = 48.);
+        let map = caret_map(&spec).unwrap();
+        let word_end = map.at(5).unwrap();
+        assert_eq!(
+            map.click_selection(word_end.x - 0.1, word_end.top + 1., false),
+            Some(0..5)
+        );
+        let comma_end = map.at(6).unwrap();
+        assert_eq!(
+            map.click_selection(comma_end.x - 0.1, comma_end.top + 1., false),
+            Some(5..6)
+        );
+        assert_eq!(
+            map.click_selection(word_end.x, word_end.top + 1., true),
+            Some(0..13)
+        );
+        let emoji_end = 14 + "👩‍💻".len();
+        let emoji = map.at(14).unwrap();
+        let after = map.at(emoji_end).unwrap();
+        assert_eq!(
+            map.click_selection((emoji.x + after.x) / 2., emoji.top + 1., false),
+            Some(14..emoji_end)
+        );
+        let last = map.at(spec.source.len()).unwrap();
+        assert_eq!(
+            map.click_selection(last.x - 0.1, last.top + 1., false),
+            Some(emoji_end + 1..spec.source.len())
+        );
+        assert_eq!(
+            map.click_selection(emoji.x, emoji.top + 1., true),
+            Some(14..spec.source.len())
+        );
+        spec.layout.width = Some(160);
+        let wrapped = caret_map(&spec).unwrap();
+        let first = wrapped.click_selection(1., 1., true).unwrap();
+        assert_eq!(first.start, 0);
+        assert!(first.end < 13); // selecting one wrapped line does not select the paragraph
+        let next = wrapped.stops.iter().find(|stop| stop.line == 1).unwrap();
+        let second = wrapped
+            .click_selection(next.x + 1., next.top + 1., true)
+            .unwrap();
+        assert!(second.start >= first.end);
+        assert!(
+            spec.source[first.end..second.start]
+                .chars()
+                .all(char::is_whitespace)
+        );
+        assert_eq!(second.end, 13);
     }
 
     #[test]

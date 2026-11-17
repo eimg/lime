@@ -2,13 +2,13 @@
 title: "Text, export, and recovery problems"
 description: "Handle missing fonts, flattened exports, PDF limits, and interrupted sessions."
 translationKey: troubleshooting/files-text-recovery
-sourceRevision: "text-styles-1"
-translatedRevision: "text-styles-1"
+sourceRevision: "text-styles-2"
+translatedRevision: "text-styles-2"
 ---
 
 ## Text looks different or is clipped {#text}
 
-A missing named font causes substitution. Check Lime's notice and choose an installed family. To use the original font, save the project, install the font, restart Lime, and reopen the project before editing again; the app caches its font list for the session. The label above the Text controls identifies their target: **All text**, **Selected text**, or **New typing**. Highlight a phrase to change only its font, size, color, Bold, or Italic. **Mixed** means the selection contains different values; changing one property preserves the others.
+A missing named font causes substitution. Check Lime's notice and choose an installed family. To use the original font, save the project, install the font, restart Lime, and reopen the project before editing again; the app caches its font list for the session. The label above the Text controls identifies their target: **All text**, **Selected text**, or **New text** for an empty draft. With nothing highlighted, style changes update the entire active text draft, even before finishing it. Double-click a word, triple-click a visible line, or drag across a phrase to change only its font, size, color, Bold, or Italic. **Mixed** means the selection contains different values; changing one property preserves the others.
 
 Turn on **Fixed box** to enable Width/Height and wrap text within those dimensions. A fixed text box clips content outside it. If overflow is reported, increase Width/Height or turn Fixed box off to remove the limits. The source text remains stored. Native input-method composition is unsupported: compose in another app and paste into Lime.
 
