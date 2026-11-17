@@ -52,48 +52,196 @@ enum SelectionHit {
     Edge(SelectionEdges),
 }
 
-/// Latest requested ratio while a selection-only commit is in flight.
-/// Its context must survive that exact commit before another edit can run.
-#[derive(Clone, Copy)]
-pub(super) struct PendingAspectRatio {
+/// Selection controls share one context and FIFO. Keep the tail outside Workspace
+/// while dispatching: starting a selection commit clears gesture state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SelectionInputContext {
     tab: usize,
     layer: crate::document::LayerId,
     tool: Tool,
     generation: u64,
-    crop: bool,
-    ratio: Option<crate::constraints::AspectRatio>,
 }
 
-impl PendingAspectRatio {
-    fn new(
-        tab: &super::Tab,
-        tool: Tool,
-        crop: bool,
-        ratio: Option<crate::constraints::AspectRatio>,
-    ) -> Self {
+impl SelectionInputContext {
+    fn new(tab: &super::Tab, tool: Tool) -> Self {
         Self {
             tab: tab.id,
             layer: tab.active_layer,
             tool,
             generation: tab.history.generation(),
-            crop,
-            ratio,
         }
     }
 
-    fn accepts(self, tab: &super::Tab, tool: Tool, generation: u64, published: bool) -> bool {
-        self.tab == tab.id
-            && self.layer == tab.active_layer
-            && self.tool == tool
-            && self.generation == generation
-            && !tab.busy()
-            && generation.checked_add(u64::from(published)) == Some(tab.history.generation())
+    fn matches(self, tab: &super::Tab, tool: Tool) -> bool {
+        self == Self::new(tab, tool)
     }
 }
 
-pub(super) struct PendingRadius {
-    context: PendingAspectRatio,
-    value: u32,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionInput {
+    Radius(u32),
+    Antialias(bool),
+    AspectRatio {
+        crop: bool,
+        ratio: Option<crate::constraints::AspectRatio>,
+    },
+}
+
+// Only metadata is projected on the UI thread; masks still build in the worker.
+#[derive(Clone, Copy)]
+pub(super) struct InFlightSelectionInput {
+    context: SelectionInputContext,
+    edit: SelectionInput,
+}
+
+#[derive(Clone, Copy)]
+struct SelectionControls {
+    rect: Option<PixelRect>,
+    radius: u32,
+    antialias: bool,
+    default_limit: u32,
+}
+
+impl SelectionControls {
+    fn new(
+        selection: Option<&Selection>,
+        radius: u32,
+        antialias: bool,
+        canvas: (u32, u32),
+    ) -> Self {
+        let geometry = selection.and_then(Selection::feather_geometry);
+        let rect = geometry
+            .map(|geometry| geometry.rect)
+            .or_else(|| match selection {
+                Some(Selection::Rect(rect)) => Some(*rect),
+                Some(Selection::RoundedRect(shape)) => Some(shape.rect()),
+                Some(Selection::Ellipse(shape)) => Some(shape.rect()),
+                _ => None,
+            });
+        let radius = geometry
+            .map(|geometry| geometry.radius)
+            .unwrap_or_else(|| match selection {
+                Some(Selection::RoundedRect(shape)) => shape.radius(),
+                Some(Selection::Rect(_)) => 0,
+                _ => radius,
+            });
+        let antialias = selection
+            .filter(|selection| {
+                selection.feather_geometry().is_some()
+                    || matches!(selection, Selection::Ellipse(_) | Selection::RoundedRect(_))
+            })
+            .map_or(antialias, Selection::is_antialiased);
+        Self {
+            rect,
+            radius,
+            antialias,
+            default_limit: canvas.0.max(canvas.1).min(i32::MAX as u32),
+        }
+    }
+
+    fn radius_limit(self) -> u32 {
+        self.rect
+            .map_or(self.default_limit, |rect| rect.width.min(rect.height) / 2)
+            .min(i32::MAX as u32)
+    }
+
+    fn radius_input(self, delta: i32) -> SelectionInput {
+        SelectionInput::Radius(stepped_radius(self.radius, delta, self.radius_limit()))
+    }
+
+    fn antialias_input(self) -> SelectionInput {
+        SelectionInput::Antialias(!self.antialias)
+    }
+
+    fn apply(&mut self, edit: SelectionInput) {
+        match edit {
+            SelectionInput::Radius(value) => self.radius = value.min(self.radius_limit()),
+            SelectionInput::Antialias(value) => self.antialias = value,
+            SelectionInput::AspectRatio {
+                crop: false,
+                ratio: Some(ratio),
+            } => {
+                if let Some(rect) = self.rect {
+                    self.rect = Some(ratio.inscribe(rect));
+                    self.radius = self.radius.min(self.radius_limit());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn projected(
+        mut self,
+        context: Option<SelectionInputContext>,
+        in_flight: Option<&InFlightSelectionInput>,
+        pending: Option<&PendingSelectionInputs>,
+    ) -> Self {
+        if let Some(in_flight) = in_flight.filter(|input| Some(input.context) == context) {
+            self.apply(in_flight.edit);
+        }
+        if let Some(pending) = pending.filter(|pending| Some(pending.context) == context) {
+            for &edit in &pending.edits {
+                self.apply(edit);
+            }
+        }
+        self
+    }
+}
+
+pub(super) struct PendingSelectionInputs {
+    context: SelectionInputContext,
+    edits: std::collections::VecDeque<SelectionInput>,
+}
+
+impl PendingSelectionInputs {
+    fn push(&mut self, edit: SelectionInput) {
+        // Consecutive radius clicks already clamp individually at admission.
+        // Coalesce only that uninterrupted run; never move it across a ratio.
+        if matches!(edit, SelectionInput::Radius(_))
+            && matches!(self.edits.back(), Some(SelectionInput::Radius(_)))
+        {
+            *self.edits.back_mut().unwrap() = edit;
+        } else {
+            self.edits.push_back(edit);
+        }
+    }
+
+    /// The callback may clear Workspace's pending slot while admitting a commit.
+    /// Own the tail throughout dispatch, and return it only after that cleanup.
+    fn drain(
+        mut self,
+        mut dispatch: impl FnMut(SelectionInput) -> Option<(SelectionInputContext, bool)>,
+    ) -> Option<Self> {
+        while let Some(edit) = self.edits.pop_front() {
+            let (context, editing) = dispatch(edit)?;
+            if context != self.context {
+                return None;
+            }
+            if editing {
+                return (!self.edits.is_empty()).then_some(self);
+            }
+        }
+        None
+    }
+
+    fn complete(&mut self, tab: &super::Tab, tool: Tool, generation: u64, published: bool) -> bool {
+        let Some(settled) = generation.checked_add(u64::from(published)) else {
+            return false;
+        };
+        if self.context.generation != generation || tab.busy() {
+            return false;
+        }
+        let expected = SelectionInputContext {
+            generation: settled,
+            ..self.context
+        };
+        if !expected.matches(tab, tool) {
+            return false;
+        }
+        // Only this validated completion may advance the remaining queue.
+        self.context = expected;
+        true
+    }
 }
 
 fn stepped_radius(value: u32, delta: i32, max: u32) -> u32 {
@@ -109,27 +257,31 @@ impl Workspace {
         }
     }
 
-    pub(super) fn active_selection_radius(&self) -> u32 {
-        if let Some(pending) = &self.pending_radius {
-            return pending.value;
-        }
-        match self
+    fn selection_controls(&self) -> SelectionControls {
+        let tab = self.active_tab();
+        let selection = self
             .selection_preview
             .as_ref()
             .or_else(|| {
-                self.active_tab()
-                    .and_then(|tab| tab.pending_canvas())
+                tab.and_then(|tab| tab.pending_canvas())
                     .and_then(|pending| pending.selection.as_ref())
             })
-            .or_else(|| self.active_tab().map(|tab| &tab.selection))
-        {
-            Some(selection) if selection.feather_geometry().is_some() => {
-                selection.feather_geometry().unwrap().radius
-            }
-            Some(Selection::RoundedRect(shape)) => shape.radius(),
-            Some(Selection::Rect(_)) => 0,
-            _ => self.preferences.selection_radius,
-        }
+            .or_else(|| tab.map(|tab| &tab.selection));
+        SelectionControls::new(
+            selection,
+            self.preferences.selection_radius,
+            self.preferences.selection_antialias,
+            tab.map_or((1, 1), |tab| tab.document.content.size()),
+        )
+        .projected(
+            tab.map(|tab| SelectionInputContext::new(tab, self.preferences.tool)),
+            self.in_flight_selection_input.as_ref(),
+            self.pending_selection_inputs.as_ref(),
+        )
+    }
+
+    pub(super) fn active_selection_radius(&self) -> u32 {
+        self.selection_controls().radius
     }
 
     pub(super) fn effective_selection_ratio(&self) -> Option<crate::constraints::AspectRatio> {
@@ -141,17 +293,33 @@ impl Workspace {
     }
 
     pub(super) fn active_selection_antialias(&self) -> bool {
-        self.active_tab()
+        self.selection_controls().antialias
+    }
+
+    pub(super) fn toggle_selection_antialias(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SelectionInput::Antialias(value) = self.selection_controls().antialias_input() else {
+            unreachable!()
+        };
+        self.set_selection_antialias(value, window, cx);
+    }
+
+    fn record_selection_input(&mut self, edit: SelectionInput) {
+        self.in_flight_selection_input = self
+            .active_tab()
             .filter(|tab| {
-                tab.selection.feather_geometry().is_some()
-                    || matches!(
-                        tab.selection,
-                        Selection::Ellipse(_) | Selection::RoundedRect(_)
-                    )
+                tab.editing
+                    && tab
+                        .pending_canvas()
+                        .is_some_and(|pending| pending.selection.is_some())
             })
-            .map_or(self.preferences.selection_antialias, |tab| {
-                tab.selection.is_antialiased()
-            })
+            .map(|tab| InFlightSelectionInput {
+                context: SelectionInputContext::new(tab, self.preferences.tool),
+                edit,
+            });
     }
 
     pub(super) fn set_aspect_ratio(
@@ -163,19 +331,14 @@ impl Workspace {
     ) {
         // A typed selection edit may itself start the commit we must wait for.
         self.commit_numeric_edit(window, cx);
-        if let Some(tab) = self.active_tab().filter(|tab| tab.editing) {
-            self.pending_aspect_ratio = Some(PendingAspectRatio::new(
-                tab,
-                self.preferences.tool,
-                crop,
-                ratio,
-            ));
+        if self.active_tab().is_some_and(|tab| tab.editing) {
+            self.queue_selection_input(SelectionInput::AspectRatio { crop, ratio });
             return;
         }
         if self.active_tab().is_some_and(|tab| tab.busy()) {
             return;
         }
-        self.pending_aspect_ratio = None;
+        self.pending_selection_inputs = None;
         if crop {
             self.preferences.crop_ratio = ratio;
             if let Some(ratio) = ratio {
@@ -193,13 +356,35 @@ impl Workspace {
                         window,
                         cx,
                     );
+                    self.record_selection_input(SelectionInput::AspectRatio {
+                        crop: false,
+                        ratio: Some(ratio),
+                    });
                 }
             }
         }
         cx.notify();
     }
 
-    pub(super) fn finish_pending_aspect_ratio(
+    fn queue_selection_input(&mut self, edit: SelectionInput) {
+        let Some(tab) = self.active_tab() else { return };
+        let context = SelectionInputContext::new(tab, self.preferences.tool);
+        let pending = self
+            .pending_selection_inputs
+            .get_or_insert_with(|| PendingSelectionInputs {
+                context,
+                edits: Default::default(),
+            });
+        if pending.context != context {
+            *pending = PendingSelectionInputs {
+                context,
+                edits: Default::default(),
+            };
+        }
+        pending.push(edit);
+    }
+
+    pub(super) fn finish_pending_selection_inputs(
         &mut self,
         id: usize,
         generation: u64,
@@ -209,24 +394,67 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if self
-            .pending_aspect_ratio
+            .in_flight_selection_input
             .as_ref()
-            .is_none_or(|pending| pending.tab != id)
+            .is_some_and(|input| input.context.tab == id && input.context.generation == generation)
+        {
+            self.in_flight_selection_input = None;
+        }
+        if self
+            .pending_selection_inputs
+            .as_ref()
+            .is_none_or(|pending| pending.context.tab != id)
         {
             return;
         }
-        let pending = self.pending_aspect_ratio.take().unwrap();
+        let mut pending = self.pending_selection_inputs.take().unwrap();
         if !matches!(change, super::Change::Selection)
             || self.form.is_some()
             || self.dialog_open
             || self.numeric_edit.is_some()
             || self.active_tab().is_none_or(|tab| {
-                !pending.accepts(tab, self.preferences.tool, generation, published)
+                !pending.complete(tab, self.preferences.tool, generation, published)
             })
         {
             return;
         }
-        self.set_aspect_ratio(pending.crop, pending.ratio, window, cx);
+        let remaining = pending.drain(|edit| {
+            match edit {
+                SelectionInput::Radius(value) => {
+                    let delta = i64::from(value) - i64::from(self.active_selection_radius());
+                    self.nudge_selection_radius(
+                        delta.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+                        window,
+                        cx,
+                    );
+                }
+                SelectionInput::Antialias(value) => {
+                    self.set_selection_antialias(value, window, cx);
+                }
+                SelectionInput::AspectRatio { crop, ratio } => {
+                    self.set_aspect_ratio(crop, ratio, window, cx);
+                }
+            }
+            if self.form.is_some() || self.dialog_open || self.numeric_edit.is_some() {
+                return None;
+            }
+            let tab = self.active_tab()?;
+            if tab.busy()
+                && !(tab.editing
+                    && tab
+                        .pending_canvas()
+                        .is_some_and(|preview| preview.selection.is_some()))
+            {
+                return None;
+            }
+            // Preference-only choices (e.g. Free) drain immediately. An admitted
+            // selection commit holds the tail for its own validated completion.
+            Some((
+                SelectionInputContext::new(tab, self.preferences.tool),
+                tab.editing,
+            ))
+        });
+        self.pending_selection_inputs = remaining;
     }
 
     pub(super) fn set_selection_antialias(
@@ -235,23 +463,28 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.preferences.selection_antialias = antialias;
-        let Some(tab) = self.active_tab().filter(|tab| !tab.busy()) else {
+        self.commit_numeric_edit(window, cx);
+        if self.active_tab().is_some_and(|tab| tab.editing) {
+            self.queue_selection_input(SelectionInput::Antialias(antialias));
             cx.notify();
             return;
-        };
-        let _ = tab;
+        }
+        if self.active_tab().is_some_and(|tab| tab.busy()) {
+            return;
+        }
+        self.preferences.selection_antialias = antialias;
         self.update_selection(
             move |selection, size| selection.with_antialias(antialias, size.0, size.1),
             window,
             cx,
         );
+        self.record_selection_input(SelectionInput::Antialias(antialias));
         cx.notify();
     }
 
     pub(super) fn clear_selection_gesture(&mut self) {
-        self.pending_aspect_ratio = None;
-        self.pending_radius = None;
+        self.in_flight_selection_input = None;
+        self.pending_selection_inputs = None;
         if self
             .numeric_edit
             .as_ref()
@@ -999,22 +1232,11 @@ impl Workspace {
         }) {
             return;
         }
-        let max = self.selection_shape_rect().map_or_else(
-            || {
-                self.active_document().map_or(1, |document| {
-                    let (width, height) = document.content.size();
-                    width.max(height)
-                })
-            },
-            |rect| rect.width.min(rect.height) / 2,
-        );
-        let max = max.min(i32::MAX as u32) as i32;
-        let value = stepped_radius(self.active_selection_radius(), delta, max as u32);
-        if let Some(tab) = self.active_tab().filter(|tab| tab.editing) {
-            self.pending_radius = Some(PendingRadius {
-                context: PendingAspectRatio::new(tab, self.preferences.tool, false, None),
-                value,
-            });
+        let SelectionInput::Radius(value) = self.selection_controls().radius_input(delta) else {
+            unreachable!()
+        };
+        if self.active_tab().is_some_and(|tab| tab.editing) {
+            self.queue_selection_input(SelectionInput::Radius(value));
             cx.notify();
             return;
         }
@@ -1039,43 +1261,6 @@ impl Workspace {
             }
         }
         cx.notify();
-    }
-
-    pub(super) fn finish_pending_radius(
-        &mut self,
-        id: usize,
-        generation: u64,
-        change: super::Change,
-        published: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self
-            .pending_radius
-            .as_ref()
-            .is_none_or(|pending| pending.context.tab != id)
-        {
-            return;
-        }
-        let pending = self.pending_radius.take().unwrap();
-        if !matches!(change, super::Change::Selection)
-            || self.form.is_some()
-            || self.dialog_open
-            || self.numeric_edit.is_some()
-            || self.active_tab().is_none_or(|tab| {
-                !pending
-                    .context
-                    .accepts(tab, self.preferences.tool, generation, published)
-            })
-        {
-            return;
-        }
-        let delta = i64::from(pending.value) - i64::from(self.active_selection_radius());
-        self.nudge_selection_radius(
-            delta.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
-            window,
-            cx,
-        );
     }
 
     pub(super) fn selection_shape_rect(&self) -> Option<PixelRect> {
@@ -1470,29 +1655,377 @@ pub(super) enum SelectionCommand {
 }
 
 #[cfg(test)]
-mod radius_handoff_tests {
+mod selection_input_tests {
     use super::*;
+    use crate::constraints::AspectRatio;
+
+    fn queue(tab: &super::super::Tab, edits: &[SelectionInput]) -> PendingSelectionInputs {
+        let mut pending = PendingSelectionInputs {
+            context: SelectionInputContext::new(tab, Tool::Select),
+            edits: Default::default(),
+        };
+        for &edit in edits {
+            pending.push(edit);
+        }
+        pending
+    }
+
+    fn publish_selection(tab: &mut super::super::Tab, selection: Selection) {
+        let generation = tab.history.generation();
+        let patch = crate::document::RenderedCanvas::prepare_patch(
+            &tab.document.canvas.pixels,
+            false,
+            tab.document.canvas.level_caches(),
+            &tab.document.content,
+            Dirty::Unpainted,
+        )
+        .unwrap();
+        let result = Some((
+            tab.document.content.clone(),
+            tab.active_layer,
+            selection,
+            patch,
+        ));
+        assert!(
+            tab.publish_change(
+                generation,
+                super::super::Change::Selection,
+                result,
+                generation + 1
+            )
+            .0
+        );
+    }
 
     #[test]
-    fn queued_steps_clamp_in_order_and_require_the_original_selection_commit() {
-        let mut tab = super::super::preview_handoff_tests::tab();
-        let pending = PendingAspectRatio::new(&tab, Tool::Select, false, None);
-        let mut value = 8;
-        for delta in [1, 1, 1, -1] {
-            value = stepped_radius(value, delta, 8);
+    fn radius_click_admission_uses_in_flight_and_queued_ratio_geometry() {
+        let tab = super::super::preview_handoff_tests::tab();
+        let original =
+            Selection::rounded_rect_quality(PixelRect::new(0, 0, 16, 8), 4, 16, 16, false);
+        let base = SelectionControls::new(Some(&original), 4, false, (16, 16));
+        let ratio = SelectionInput::AspectRatio {
+            crop: false,
+            ratio: Some(AspectRatio {
+                width: 1,
+                height: 4,
+            }),
+        };
+        for ratio_in_flight in [true, false] {
+            let mut pending = queue(&tab, &[]);
+            let in_flight = InFlightSelectionInput {
+                context: pending.context,
+                edit: if ratio_in_flight {
+                    ratio
+                } else {
+                    SelectionInput::Antialias(true)
+                },
+            };
+            if !ratio_in_flight {
+                pending.push(ratio);
+            }
+            let read = |pending: &PendingSelectionInputs| {
+                base.projected(Some(pending.context), Some(&in_flight), Some(pending))
+            };
+            let controls = read(&pending);
+            assert_eq!(controls.rect.unwrap().width, 2);
+            assert_eq!(controls.radius, 1);
+            // Admission uses the same reducer as the handler and displayed readout.
+            let decrement = controls.radius_input(-1);
+            assert_eq!(decrement, SelectionInput::Radius(0));
+            pending.push(decrement);
+            assert_eq!(read(&pending).radius, 0);
+            for delta in [1, 1, -1] {
+                pending.push(read(&pending).radius_input(delta));
+            }
+            assert_eq!(
+                read(&pending).radius,
+                0,
+                "clamp every click before coalescing"
+            );
+            let reshaped = refit_selection(
+                original.clone(),
+                AspectRatio {
+                    width: 1,
+                    height: 4,
+                },
+                (16, 16),
+            );
+            let SelectionInput::Radius(radius) = *pending.edits.back().unwrap() else {
+                panic!()
+            };
+            let result = editable_selection_for_rect(
+                &reshaped,
+                rect_for_radius(&reshaped).unwrap(),
+                Some(radius),
+                false,
+                (16, 16),
+            )
+            .unwrap();
+            assert_eq!(
+                SelectionControls::new(Some(&result), 4, false, (16, 16)).radius,
+                0
+            );
         }
-        assert_eq!(value, 7); // Saturated + clicks must not cancel the later - click.
-        assert_eq!(stepped_radius(0, -1, 8), 0);
-        assert!(!pending.accepts(&tab, Tool::Select, 0, false)); // still busy
+    }
+
+    #[test]
+    fn antialias_click_admission_tracks_in_flight_quality_and_rejects_stale_readouts() {
+        let mut tab = super::super::preview_handoff_tests::tab();
+        let original =
+            Selection::rounded_rect_quality(PixelRect::new(0, 0, 16, 8), 4, 16, 16, false);
+        let base = SelectionControls::new(Some(&original), 4, false, (16, 16));
+        let mut pending = queue(&tab, &[]);
+        let first_click = base.antialias_input();
+        assert_eq!(first_click, SelectionInput::Antialias(true));
+        let in_flight = InFlightSelectionInput {
+            context: pending.context,
+            edit: first_click,
+        };
+        let shown = base.projected(Some(pending.context), Some(&in_flight), Some(&pending));
+        assert!(shown.antialias);
+        let second_click = shown.antialias_input();
+        assert_eq!(second_click, SelectionInput::Antialias(false));
+        pending.push(second_click);
+        assert!(
+            !base
+                .projected(Some(pending.context), Some(&in_flight), Some(&pending))
+                .antialias
+        );
+
+        publish_selection(&mut tab, original.clone().with_antialias(true, 16, 16));
+        assert!(pending.complete(&tab, Tool::Select, 0, true));
+        let settled = SelectionControls::new(Some(&tab.selection), 4, true, (16, 16));
+        assert!(
+            !settled
+                .projected(Some(pending.context), None, Some(&pending))
+                .antialias
+        );
+        let third_click = settled
+            .projected(Some(pending.context), None, Some(&pending))
+            .antialias_input();
+        assert_eq!(third_click, SelectionInput::Antialias(true));
+        pending.push(third_click);
+        pending.push(SelectionInput::AspectRatio {
+            crop: false,
+            ratio: Some(AspectRatio {
+                width: 1,
+                height: 4,
+            }),
+        });
+        // Both stored readout sources must reject each stale-context dimension.
+        let context = pending.context;
+        let in_flight = InFlightSelectionInput {
+            context,
+            edit: first_click,
+        };
+        for changed in [
+            None,
+            Some(SelectionInputContext {
+                tab: context.tab + 1,
+                ..context
+            }),
+            Some(SelectionInputContext {
+                layer: crate::document::LayerId(999),
+                ..context
+            }),
+            Some(SelectionInputContext {
+                tool: Tool::OvalSelect,
+                ..context
+            }),
+            Some(SelectionInputContext {
+                generation: context.generation + 1,
+                ..context
+            }),
+        ] {
+            let shown = base.projected(changed, Some(&in_flight), Some(&pending));
+            assert!(!shown.antialias);
+            assert_eq!(shown.radius, 4);
+            assert_eq!(shown.rect.unwrap().width, 16);
+        }
+    }
+
+    #[test]
+    fn selection_controls_survive_successive_commits_in_click_order() {
+        let ratio = SelectionInput::AspectRatio {
+            crop: false,
+            ratio: Some(AspectRatio::SQUARE),
+        };
+        for edits in [
+            &[SelectionInput::Radius(3), ratio][..],
+            &[ratio, SelectionInput::Radius(3)][..],
+            &[
+                SelectionInput::Antialias(true),
+                SelectionInput::Radius(3),
+                ratio,
+            ][..],
+            &[SelectionInput::Radius(3), ratio, SelectionInput::Radius(1)][..],
+            &[
+                SelectionInput::Radius(3),
+                SelectionInput::Antialias(true),
+                ratio,
+            ][..],
+            &[
+                SelectionInput::Radius(3),
+                ratio,
+                SelectionInput::Antialias(true),
+                SelectionInput::Antialias(false),
+            ][..],
+            &[
+                SelectionInput::Radius(3),
+                SelectionInput::Antialias(true),
+                ratio,
+                SelectionInput::Radius(1),
+            ][..],
+        ] {
+            let mut tab = super::super::preview_handoff_tests::tab();
+            let mut slot = Some(queue(&tab, edits));
+            publish_selection(&mut tab, Selection::Rect(PixelRect::new(0, 0, 16, 8)));
+            let mut completed_generation = 0;
+            let mut published = true;
+            let mut antialias_preference = false;
+            for &expected in edits {
+                let mut pending = slot.take().expect("neither control may be lost");
+                assert!(pending.complete(&tab, Tool::Select, completed_generation, published));
+                let mut result = None;
+                // Run the same ownership/dispatch routine as Workspace, with an
+                // admission callback that clears the slot just like gesture cleanup.
+                slot = pending.drain(|edit| {
+                    assert_eq!(edit, expected);
+                    result = Some(match edit {
+                        SelectionInput::Radius(value) => editable_selection_for_rect(
+                            &tab.selection,
+                            rect_for_radius(&tab.selection).unwrap(),
+                            Some(value),
+                            antialias_preference,
+                            (16, 16),
+                        )
+                        .unwrap(),
+                        SelectionInput::Antialias(value) => {
+                            antialias_preference = value;
+                            tab.selection.clone().with_antialias(value, 16, 16)
+                        }
+                        SelectionInput::AspectRatio {
+                            ratio: Some(ratio), ..
+                        } => refit_selection(tab.selection.clone(), ratio, (16, 16)),
+                        _ => unreachable!(),
+                    });
+                    slot = None;
+                    tab.editing = true;
+                    Some((SelectionInputContext::new(&tab, Tool::Select), true))
+                });
+                completed_generation = tab.history.generation();
+                if let Some(pending) = &mut slot {
+                    assert!(!pending.complete(&tab, Tool::Select, completed_generation, false));
+                }
+                let result = result.unwrap();
+                published = result != tab.selection;
+                if published {
+                    publish_selection(&mut tab, result);
+                } else {
+                    assert!(
+                        !tab.publish_change(
+                            completed_generation,
+                            super::super::Change::Selection,
+                            None,
+                            completed_generation + 1
+                        )
+                        .0
+                    );
+                }
+            }
+            assert!(slot.is_none());
+            let expected_antialias = edits
+                .iter()
+                .rev()
+                .find_map(|edit| match edit {
+                    SelectionInput::Antialias(value) => Some(*value),
+                    _ => None,
+                })
+                .unwrap_or(false);
+            assert_eq!(tab.selection.is_antialiased(), expected_antialias);
+            let Selection::RoundedRect(shape) = tab.selection else {
+                panic!("both edits must remain")
+            };
+            let expected_radius = edits
+                .iter()
+                .rev()
+                .find_map(|edit| match edit {
+                    SelectionInput::Radius(value) => Some(*value),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(shape.radius(), expected_radius);
+            assert_eq!((shape.rect().width, shape.rect().height), (8, 8));
+        }
+    }
+
+    #[test]
+    fn queued_controls_reject_context_changes_after_each_completion_and_keep_clamping() {
+        let edits = [
+            SelectionInput::Radius(3),
+            SelectionInput::Antialias(true),
+            SelectionInput::AspectRatio {
+                crop: false,
+                ratio: Some(AspectRatio::SQUARE),
+            },
+        ];
+        for stage in [0, 1, 2] {
+            for stale in ["tab", "layer", "tool", "generation", "completion"] {
+                let mut tab = super::super::preview_handoff_tests::tab();
+                let mut pending = queue(&tab, &edits);
+                for generation in 0..stage {
+                    publish_selection(&mut tab, Selection::Rect(PixelRect::new(0, 0, 16, 8)));
+                    assert!(pending.complete(&tab, Tool::Select, generation, true));
+                    pending.edits.pop_front();
+                    tab.editing = true;
+                }
+                publish_selection(&mut tab, Selection::Rect(PixelRect::new(0, 0, 8, 8)));
+                let mut tool = Tool::Select;
+                let mut generation = stage;
+                match stale {
+                    "tab" => tab.id += 1,
+                    "layer" => tab.active_layer = crate::document::LayerId(999),
+                    "tool" => tool = Tool::OvalSelect,
+                    "generation" => tab.history.commit(tab.state(), 99, true),
+                    "completion" => generation += 1,
+                    _ => unreachable!(),
+                }
+                assert!(
+                    !pending.complete(&tab, tool, generation, true),
+                    "{stale} at {stage}"
+                );
+            }
+        }
+        let mut tab = super::super::preview_handoff_tests::tab();
+        let mut pending = queue(&tab, &[]);
+        let mut value = 8;
+        for delta in [1, 1, -1] {
+            value = stepped_radius(value, delta, 8);
+            pending.push(SelectionInput::Radius(value));
+        }
+        let controls = SelectionControls::new(None, 8, false, (16, 8)).projected(
+            Some(pending.context),
+            None,
+            Some(&pending),
+        );
+        assert_eq!(controls.radius, 7);
+        assert_eq!(pending.edits.len(), 1);
         tab.publish_change(0, super::super::Change::Selection, None, 1);
-        assert!(pending.accepts(&tab, Tool::Select, 0, false)); // no-op may drain clicks
-        assert!(!pending.accepts(&tab, Tool::OvalSelect, 0, false));
-        tab.id += 1;
-        assert!(!pending.accepts(&tab, Tool::Select, 0, false));
-        tab.id -= 1;
-        tab.history.commit(tab.state(), 2, false);
-        assert!(pending.accepts(&tab, Tool::Select, 0, true));
-        tab.history.commit(tab.state(), 3, true);
-        assert!(!pending.accepts(&tab, Tool::Select, 0, true));
+        assert!(pending.complete(&tab, Tool::Select, 0, false));
+        let free = SelectionInput::AspectRatio {
+            crop: false,
+            ratio: None,
+        };
+        pending.edits.push_front(free);
+        let mut dispatched = Vec::new();
+        assert!(
+            pending
+                .drain(|edit| {
+                    dispatched.push(edit);
+                    Some((SelectionInputContext::new(&tab, Tool::Select), false))
+                })
+                .is_none()
+        );
+        assert_eq!(dispatched, [free, SelectionInput::Radius(7)]);
     }
 }

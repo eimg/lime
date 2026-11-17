@@ -3,6 +3,7 @@ use gpui::{Context, CursorStyle, Pixels, Point, Window, point};
 use super::Workspace;
 use super::canvas_tools::PreviewGeometry;
 use super::layers::MovePaint;
+use super::preview_backdrop::{Backdrop, PreviewContext};
 use crate::commands::Tool;
 use crate::document::{self, LayerId, MAX_NEW_EDGE};
 use crate::preview::{Dirty, PixelRect};
@@ -218,6 +219,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.scale_backdrop.reset(window, cx);
         self.scale_token = self.scale_token.wrapping_add(1);
         self.scale_drag = Some(drag);
         self.request_scale_preview(window, cx);
@@ -230,6 +232,12 @@ impl Workspace {
         self.scale_preview_dirty = true;
         self.pump_scale_preview(window, cx);
         cx.notify();
+    }
+
+    pub(super) fn scale_preview_context(&self) -> Option<PreviewContext> {
+        let layer = self.scale_drag?.layer;
+        self.preview_context(self.scale_backdrop.epoch, Some(layer), layer)
+            .filter(|context| context.layer == layer)
     }
 
     fn pump_scale_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -247,10 +255,12 @@ impl Workspace {
         };
         let tab_id = tab.id;
         let generation = tab.history.generation();
-        let base = self
-            .scale_overlay
-            .is_none()
-            .then(|| tab.document.content.clone());
+        let Some(context) = self.scale_preview_context() else {
+            return;
+        };
+        let backdrop = self.scale_backdrop.take(context, window, cx);
+        let base = (self.scale_overlay.is_none() && backdrop.is_none())
+            .then(|| self.active_tab().unwrap().document.content.clone());
         let target = drag.target;
         let resample = self.preferences.warp_resample;
         self.scale_preview_dirty = false;
@@ -267,13 +277,15 @@ impl Workspace {
         };
         let job = cx.background_executor().spawn(async move {
             let shown = scale_preview_pixels(&layer, (target.width, target.height), resample);
-            let (below, above) = base
-                .as_ref()
-                .map(|content| content.preview_around(drag.layer))
-                .unwrap_or((None, None));
+            let backdrop = backdrop.or_else(|| {
+                base.as_ref()
+                    .map(|content| Backdrop::prepare(content, Some(drag.layer), drag.layer))
+            });
+            let (below, above) =
+                backdrop.map_or((None, None), |backdrop| (backdrop.below, backdrop.above));
             MovePaint {
-                below: below.as_ref().map(document::preview_render),
-                above: above.as_ref().map(document::preview_render),
+                below,
+                above,
                 sprite: document::preview_render(&shown),
                 offset: (target.x as i32, target.y as i32),
                 size: (target.width, target.height),
@@ -296,11 +308,12 @@ impl Workspace {
                         resample: this.preferences.warp_resample,
                     });
                 if let Some(current) = current.filter(|current| {
-                    request.can_publish(
-                        *current,
-                        this.scale_preview_dirty,
-                        this.scale_pointer_dragging(),
-                    )
+                    this.scale_preview_context() == Some(context)
+                        && request.can_publish(
+                            *current,
+                            this.scale_preview_dirty,
+                            this.scale_pointer_dragging(),
+                        )
                 }) {
                     // An interim sprite follows the latest frame, rather than
                     // pulling the frame back to the geometry of its old request.
@@ -323,6 +336,19 @@ impl Workspace {
                         super::drop_images(std::iter::once(previous_sprite), window, cx);
                     }
                 } else {
+                    let backdrop = Backdrop::take(&mut overlay);
+                    let current = this.scale_preview_context();
+                    let discarded = this.scale_backdrop.retain(
+                        context,
+                        current,
+                        this.scale_overlay.is_some(),
+                        backdrop,
+                    );
+                    super::drop_images(
+                        discarded.into_iter().flat_map(Backdrop::into_images),
+                        window,
+                        cx,
+                    );
                     super::drop_images(overlay.into_images(), window, cx);
                 }
                 if this.scale_preview_dirty {
@@ -509,6 +535,7 @@ impl Workspace {
         }
         self.scale_token = self.scale_token.wrapping_add(1);
         self.scale_drag = None;
+        self.scale_backdrop.reset(window, cx);
         self.scale_preview_dirty = false;
         if let Some(overlay) = self.scale_overlay.take() {
             super::drop_images(overlay.into_images(), window, cx);

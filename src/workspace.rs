@@ -22,6 +22,7 @@ mod paint_ui;
 mod path_ui;
 mod pdf_preview;
 mod pdf_ui;
+mod preview_backdrop;
 mod recovery_ui;
 mod scale_ui;
 mod selection;
@@ -325,8 +326,8 @@ pub struct Workspace {
     crop: Option<CropRect>,
     selection_drag: Option<selection::SelectionGesture>,
     selection_preview: Option<Selection>,
-    pending_aspect_ratio: Option<selection::PendingAspectRatio>,
-    pending_radius: Option<selection::PendingRadius>,
+    pending_selection_inputs: Option<selection::PendingSelectionInputs>,
+    in_flight_selection_input: Option<selection::InFlightSelectionInput>,
     free_points: Vec<Point<f32>>,
     free_nodes: Vec<usize>,
     free_node_drag: Option<(usize, Point<f32>)>,
@@ -338,6 +339,7 @@ pub struct Workspace {
     composite_preview: composite_preview::CompositePreview,
     scale_drag: Option<scale_ui::ScaleDrag>,
     scale_overlay: Option<layers::MovePaint>,
+    scale_backdrop: preview_backdrop::BackdropCache,
     scale_token: u64,
     scale_preview_busy: bool,
     scale_preview_dirty: bool,
@@ -346,6 +348,7 @@ pub struct Workspace {
     pending_nudge: Option<layers::PendingNudge>,
     warp: Option<transform_ui::WarpSession>,
     warp_overlay: Option<layers::MovePaint>,
+    warp_backdrop: preview_backdrop::BackdropCache,
     warp_token: u64,
     warp_busy: bool,
     warp_preview_edge: u32,
@@ -389,6 +392,7 @@ pub struct Workspace {
     text_dirty: bool,
     text_error: Option<crate::text::TextError>,
     text_overlay: Option<layers::MovePaint>,
+    text_backdrop: preview_backdrop::BackdropCache,
     // The tab whose committed text still shows the preview until its patch lands.
     text_settled: Option<usize>,
     text_continuation: Option<(usize, text_ui::TextContinuation)>,
@@ -591,8 +595,8 @@ impl Workspace {
             crop: None,
             selection_drag: None,
             selection_preview: None,
-            pending_aspect_ratio: None,
-            pending_radius: None,
+            pending_selection_inputs: None,
+            in_flight_selection_input: None,
             free_points: Vec::new(),
             free_nodes: Vec::new(),
             free_node_drag: None,
@@ -604,6 +608,7 @@ impl Workspace {
             composite_preview: Default::default(),
             scale_drag: None,
             scale_overlay: None,
+            scale_backdrop: Default::default(),
             scale_token: 0,
             scale_preview_busy: false,
             scale_preview_dirty: false,
@@ -612,6 +617,7 @@ impl Workspace {
             pending_nudge: None,
             warp: None,
             warp_overlay: None,
+            warp_backdrop: Default::default(),
             warp_token: 0,
             warp_busy: false,
             warp_preview_edge: 0,
@@ -655,6 +661,7 @@ impl Workspace {
             text_dirty: false,
             text_error: None,
             text_overlay: None,
+            text_backdrop: Default::default(),
             text_settled: None,
             text_continuation: None,
             font_families: None,
@@ -1059,8 +1066,7 @@ impl Workspace {
         }
         self.finish_numeric_followup(id, generation, published, window, cx);
         self.finish_pending_nudge(id, generation, published, window, cx);
-        self.finish_pending_radius(id, generation, change, published, window, cx);
-        self.finish_pending_aspect_ratio(id, generation, change, published, window, cx);
+        self.finish_pending_selection_inputs(id, generation, change, published, window, cx);
     }
 
     // Publishes a background result only if the tab has not changed since the job started.

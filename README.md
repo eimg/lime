@@ -61,6 +61,7 @@ Applying keeps the preview visible until the finished edit is ready.
 Fold secondary option sections with the mouse or keyboard to leave more room for Layers and Paths;
 their headers summarize active settings. Oval Select uses **1:1** for circles.
 Aspect-ratio choices also reshape the current selection or crop box.
+Radius, aspect-ratio, and Antialias changes wait their turn while a selection updates.
 Typed numeric edits finish before Save and layer menu commands.
 Delete/Backspace clears the selected area of the active raster layer to transparency.
 Move uses a four-arrow cursor and always moves the active layer.

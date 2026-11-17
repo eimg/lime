@@ -1,6 +1,6 @@
 //! Background compositing for previews whose blend modes depend on the backdrop.
 //! The normal-only stack retains its existing immediate GPU sprite path.
-use super::{Workspace, layers::MovePaint};
+use super::{Workspace, layers::MovePaint, preview_backdrop::PreviewContext};
 use crate::document::{self, BlendMode, DocumentContent, LayerId};
 use gpui::{Context, Window};
 use image::{Rgba, RgbaImage};
@@ -8,21 +8,34 @@ use std::sync::Arc;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Key {
-    tab: usize,
-    generation: u64,
+    context: PreviewContext,
     sprite: gpui::ImageId,
     offset: (i32, i32),
     size: (u32, u32),
-    target: Option<LayerId>,
-    above: LayerId,
     linked_move: bool,
+}
+
+impl Key {
+    fn same_session(self, other: Self) -> bool {
+        self.context == other.context && self.linked_move == other.linked_move
+    }
 }
 
 #[derive(Default)]
 pub(super) struct CompositePreview {
-    requested: Option<Key>,
     published: Option<(Key, MovePaint)>,
     busy: bool,
+}
+
+impl CompositePreview {
+    fn complete(&mut self, key: Key, current: Option<Key>, paint: MovePaint) -> Option<MovePaint> {
+        self.busy = false;
+        if current.is_some_and(|current| key.same_session(current)) {
+            self.published.replace((key, paint)).map(|(_, old)| old)
+        } else {
+            Some(paint)
+        }
+    }
 }
 
 impl Workspace {
@@ -33,6 +46,56 @@ impl Workspace {
             && self
                 .active_tab()
                 .is_some_and(|tab| tab.document.content.movement_layers(tab.active_layer).len() > 1)
+    }
+
+    fn composite_key(&self, raw: &MovePaint) -> Option<Key> {
+        let tab = self.active_tab()?;
+        if !tab.document.content.needs_composite_preview() && !self.linked_move_preview(raw) {
+            return None;
+        }
+        let matches = |overlay: &Option<MovePaint>| {
+            overlay
+                .as_ref()
+                .is_some_and(|paint| Arc::ptr_eq(&paint.sprite, &raw.sprite))
+        };
+        // Text and Move already have explicit commit handoffs. Keep the visible
+        // composite's identity through a tool change while that commit settles.
+        if ((matches(&self.text_overlay) && self.text_settled == Some(tab.id))
+            || (matches(&self.move_overlay) && self.move_settled.is_some()))
+            && let Some((key, _)) = self.composite_preview.published.as_ref()
+            && key.context.tab == tab.id
+            && key.context.generation == tab.history.generation()
+            && key.context.layer == tab.active_layer
+            && key.sprite == raw.sprite.id
+        {
+            return Some(*key);
+        }
+        let (session, target, above) = if matches(&self.text_overlay) {
+            let (target, above) = self
+                .text_preview_target()
+                .unwrap_or((Some(tab.active_layer), tab.active_layer));
+            (self.text_backdrop.epoch, target, above)
+        } else {
+            let session = if matches(&self.move_overlay) {
+                self.move_token
+            } else if matches(&self.warp_overlay) {
+                self.warp_backdrop.epoch
+            } else if matches(&self.scale_overlay) {
+                self.scale_backdrop.epoch
+            } else if matches(&self.gradient_overlay) {
+                self.gradient.as_ref()?.epoch
+            } else {
+                return None;
+            };
+            (session, Some(tab.active_layer), tab.active_layer)
+        };
+        Some(Key {
+            context: self.preview_context(session, target, above)?,
+            sprite: raw.sprite.id,
+            offset: raw.offset,
+            size: raw.size,
+            linked_move: self.linked_move_preview(raw),
+        })
     }
 
     pub(super) fn move_paint(&self) -> Option<MovePaint> {
@@ -52,6 +115,10 @@ impl Workspace {
             self.composite_preview
                 .published
                 .as_ref()
+                .filter(|(key, _)| {
+                    self.composite_key(&raw)
+                        .is_some_and(|current| key.same_session(current))
+                })
                 .map(|(_, paint)| paint.clone())
         } else {
             Some(raw)
@@ -97,50 +164,22 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let raw = self.raw_move_paint();
-        let input = self
-            .active_tab()
-            .zip(raw)
-            .filter(|(tab, raw)| {
-                tab.document.content.needs_composite_preview() || self.linked_move_preview(raw)
-            })
-            .map(|(tab, raw)| {
-                let (target, above) = if self
-                    .text_overlay
-                    .as_ref()
-                    .is_some_and(|text| Arc::ptr_eq(&text.sprite, &raw.sprite))
-                {
-                    self.text_preview_target()
-                        .unwrap_or((Some(tab.active_layer), tab.active_layer))
-                } else {
-                    (Some(tab.active_layer), tab.active_layer)
-                };
-                let key = Key {
-                    tab: tab.id,
-                    generation: tab.history.generation(),
-                    sprite: raw.sprite.id,
-                    offset: raw.offset,
-                    size: raw.size,
-                    target,
-                    above,
-                    linked_move: self.linked_move_preview(&raw),
-                };
-                (key, raw, tab.document.content.clone())
-            });
+        let input = self.raw_move_paint().and_then(|raw| {
+            let key = self.composite_key(&raw)?;
+            Some((key, raw, self.active_tab()?.document.content.clone()))
+        });
         let Some((key, raw, content)) = input else {
-            self.composite_preview.requested = None;
             if let Some((_, paint)) = self.composite_preview.published.take() {
                 super::drop_images(paint.into_images(), window, cx);
             }
             return;
         };
-        self.composite_preview.requested = Some(key);
-        // Never display a previous tab's preview or a result from older content.
+        // Session boundaries include tab/layer/tool/content and cancel/restart epochs.
         if self
             .composite_preview
             .published
             .as_ref()
-            .is_some_and(|(old, _)| old.tab != key.tab || old.generation != key.generation)
+            .is_some_and(|(old, _)| !old.same_session(key))
         {
             let (_, paint) = self.composite_preview.published.take().unwrap();
             super::drop_images(paint.into_images(), window, cx);
@@ -167,8 +206,8 @@ impl Workspace {
             let image = composite(
                 &content,
                 &raw,
-                key.target,
-                Some(key.above),
+                key.context.target,
+                Some(key.context.above),
                 1024,
                 mask_baked,
                 key.linked_move,
@@ -184,15 +223,15 @@ impl Workspace {
         cx.spawn_in(window, async move |workspace, cx| {
             let paint = job.await;
             let _ = workspace.update_in(cx, |workspace, window, cx| {
-                workspace.composite_preview.busy = false;
-                if workspace.composite_preview.requested == Some(key) {
-                    if let Some((_, old)) =
-                        workspace.composite_preview.published.replace((key, paint))
-                    {
-                        super::drop_images(old.into_images(), window, cx);
-                    }
-                } else {
-                    super::drop_images(paint.into_images(), window, cx);
+                // Re-read live state: cancellation may happen before the next render.
+                // One worker at a time preserves completion order. Accept an interim
+                // frame from this session so continuous motion cannot starve display;
+                // the next render schedules the newest raw sprite/geometry.
+                let current = workspace
+                    .raw_move_paint()
+                    .and_then(|raw| workspace.composite_key(&raw));
+                if let Some(discarded) = workspace.composite_preview.complete(key, current, paint) {
+                    super::drop_images(discarded.into_images(), window, cx);
                 }
                 cx.notify();
             });
@@ -306,4 +345,112 @@ fn composite(
         }
     }
     output
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+    use crate::commands::Tool;
+
+    fn paint(value: u8) -> MovePaint {
+        MovePaint {
+            below: None,
+            above: None,
+            sprite: document::preview_render(&RgbaImage::from_pixel(
+                8,
+                8,
+                Rgba([value, 20, 40, 255]),
+            )),
+            offset: (0, 0),
+            size: (8, 8),
+        }
+    }
+
+    #[test]
+    fn continuous_input_publishes_completed_frames_then_converges_to_latest() {
+        let mut state = CompositePreview::default();
+        let mut key = Key {
+            context: PreviewContext {
+                tab: 1,
+                generation: 2,
+                layer: LayerId(1),
+                tool: Tool::Move,
+                session: 3,
+                target: Some(LayerId(1)),
+                above: LayerId(1),
+            },
+            sprite: paint(0).sprite.id,
+            offset: (0, 0),
+            size: (8, 8),
+            linked_move: true,
+        };
+        for index in 1..5 {
+            let next = Key {
+                sprite: paint(index).sprite.id,
+                offset: (index as i32, 0),
+                ..key
+            };
+            let finished = paint(index);
+            let id = finished.sprite.id;
+            state.busy = true;
+            // Every job finishes after another pointer/sprite update.
+            state.complete(key, Some(next), finished);
+            assert!(!state.busy);
+            assert_eq!(state.published.as_ref().unwrap().1.sprite.id, id);
+            key = next;
+        }
+        let final_frame = paint(255);
+        let final_bytes = final_frame.sprite.as_bytes(0).unwrap().to_vec();
+        state.complete(key, Some(key), final_frame);
+        let (published, published_paint) = state.published.as_ref().unwrap();
+        assert!(*published == key);
+        assert_eq!(published_paint.sprite.as_bytes(0).unwrap(), final_bytes);
+
+        // Reject old work even when tab/tool are unchanged after cancel/restart.
+        for context in [
+            PreviewContext {
+                session: 4,
+                ..key.context
+            },
+            PreviewContext {
+                tab: 2,
+                ..key.context
+            },
+            PreviewContext {
+                generation: 3,
+                ..key.context
+            },
+            PreviewContext {
+                layer: LayerId(2),
+                ..key.context
+            },
+            PreviewContext {
+                tool: Tool::Rotate,
+                ..key.context
+            },
+            PreviewContext {
+                target: None,
+                ..key.context
+            },
+            PreviewContext {
+                above: LayerId(2),
+                ..key.context
+            },
+        ] {
+            let rejected = state.complete(key, Some(Key { context, ..key }), paint(0));
+            assert!(rejected.is_some());
+            assert_eq!(
+                state
+                    .published
+                    .as_ref()
+                    .unwrap()
+                    .1
+                    .sprite
+                    .as_bytes(0)
+                    .unwrap(),
+                final_bytes
+            );
+        }
+        assert!(state.complete(key, None, paint(0)).is_some());
+    }
 }

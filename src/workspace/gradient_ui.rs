@@ -51,6 +51,8 @@ pub(super) struct GradientFrame {
 }
 
 pub(super) struct GradientSession {
+    pub(super) epoch: u64,
+    backdrop: Option<GradientBackdrop>,
     layer: LayerId,
     source: Arc<RgbaImage>,
     offset: (i32, i32),
@@ -71,7 +73,57 @@ enum GradientDrag {
     Handle { index: usize, grab: (f64, f64) },
 }
 
+// Ownership is transferred between the worker, a waiting session, and its
+// overlay. There is no cross-document cache and no second owner evicting GPU data.
+struct GradientBackdrop {
+    below: Option<Arc<RenderImage>>,
+    above: Option<Arc<RenderImage>>,
+}
+
+impl GradientBackdrop {
+    fn into_images(self) -> impl Iterator<Item = Arc<RenderImage>> {
+        self.below.into_iter().chain(self.above)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GradientRequest {
+    tab: usize,
+    generation: u64,
+    layer: LayerId,
+    session: u64,
+    request: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum GradientCompletion {
+    Publish,
+    KeepBackdrop,
+    Discard,
+}
+
+impl GradientRequest {
+    fn completion(self, current: Option<Self>, has_overlay: bool) -> GradientCompletion {
+        let Some(current) = current else {
+            return GradientCompletion::Discard;
+        };
+        if self == current {
+            GradientCompletion::Publish
+        } else if (Self {
+            request: current.request,
+            ..self
+        }) == current
+            && !has_overlay
+        {
+            GradientCompletion::KeepBackdrop
+        } else {
+            GradientCompletion::Discard
+        }
+    }
+}
+
 struct PreparedGradient {
+    backdrop: Option<GradientBackdrop>,
     base: Option<DocumentContent>,
     source: Arc<RgbaImage>,
     offset: (i32, i32),
@@ -458,6 +510,8 @@ impl Workspace {
             return;
         }
         let session = GradientSession {
+            epoch: self.gradient_token.wrapping_add(1),
+            backdrop: None,
             layer: layer.id,
             source: layer.pixels.clone(),
             offset: layer.offset,
@@ -466,6 +520,9 @@ impl Workspace {
             end: point,
             drag: Some(GradientDrag::New),
         };
+        if let Some(backdrop) = self.gradient.take().and_then(|session| session.backdrop) {
+            super::drop_images(backdrop.into_images(), window, cx);
+        }
         self.gradient = Some(session);
         self.request_gradient_preview(window, cx);
     }
@@ -524,7 +581,9 @@ impl Workspace {
     pub(super) fn cancel_gradient(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.gradient_token = self.gradient_token.wrapping_add(1);
         self.gradient_dirty = false;
-        self.gradient = None;
+        if let Some(backdrop) = self.gradient.take().and_then(|session| session.backdrop) {
+            super::drop_images(backdrop.into_images(), window, cx);
+        }
         self.drop_gradient_overlay(window, cx);
     }
 
@@ -613,13 +672,26 @@ impl Workspace {
         Some(self.gradient_value(session.start, session.end))
     }
 
+    fn gradient_request(&self) -> Option<GradientRequest> {
+        let session = self.gradient.as_ref()?;
+        let tab = self
+            .active_tab()
+            .filter(|tab| tab.active_layer == session.layer)?;
+        Some(GradientRequest {
+            tab: tab.id,
+            generation: tab.history.generation(),
+            layer: session.layer,
+            session: session.epoch,
+            request: self.gradient_token,
+        })
+    }
+
     fn prepare_gradient_preview(&self) -> Option<PreparedGradient> {
         let session = self.gradient.as_ref()?;
         let tab = self.active_tab()?;
         Some(PreparedGradient {
-            base: self
-                .gradient_overlay
-                .is_none()
+            backdrop: None,
+            base: (self.gradient_overlay.is_none() && session.backdrop.is_none())
                 .then(|| tab.document.content.clone()),
             source: session.source.clone(),
             offset: session.offset,
@@ -647,12 +719,18 @@ impl Workspace {
         if self.gradient_busy || !self.gradient_dirty || self.gradient.is_none() {
             return;
         }
-        let Some(prepared) = self.prepare_gradient_preview() else {
+        let Some(request) = self.gradient_request() else {
             return;
         };
+        let Some(mut prepared) = self.prepare_gradient_preview() else {
+            return;
+        };
+        prepared.backdrop = self
+            .gradient
+            .as_mut()
+            .and_then(|session| session.backdrop.take());
         self.gradient_dirty = false;
         self.gradient_busy = true;
-        let token = self.gradient_token;
         let job = cx
             .background_executor()
             .spawn(async move { preview_gradient(prepared) });
@@ -660,11 +738,27 @@ impl Workspace {
             let preview = job.await;
             let _ = workspace.update_in(cx, |workspace, window, cx| {
                 workspace.gradient_busy = false;
-                let current = workspace.gradient.is_some() && workspace.gradient_token == token;
-                if current {
-                    workspace.publish_gradient_preview(preview, window, cx);
-                } else {
-                    drop_gradient_preview(preview, window, cx);
+                match request.completion(
+                    workspace.gradient_request(),
+                    workspace.gradient_overlay.is_some(),
+                ) {
+                    GradientCompletion::Publish => {
+                        workspace.publish_gradient_preview(preview, window, cx)
+                    }
+                    GradientCompletion::KeepBackdrop => {
+                        // Pointer/parameter changes invalidate only the sprite. The
+                        // unchanged stack is expensive and still belongs to this session.
+                        let GradientPreview {
+                            below,
+                            above,
+                            sprite,
+                            ..
+                        } = preview;
+                        workspace.gradient.as_mut().unwrap().backdrop =
+                            Some(GradientBackdrop { below, above });
+                        super::drop_images([sprite], window, cx);
+                    }
+                    GradientCompletion::Discard => drop_gradient_preview(preview, window, cx),
                 }
                 if workspace.gradient_dirty {
                     workspace.pump_gradient_preview(window, cx);
@@ -750,6 +844,7 @@ fn constrain(gradient: Gradient, mode: ColorMode) -> Gradient {
 
 fn preview_gradient(prepared: PreparedGradient) -> GradientPreview {
     let PreparedGradient {
+        backdrop,
         base,
         source,
         offset,
@@ -772,16 +867,72 @@ fn preview_gradient(prepared: PreparedGradient) -> GradientPreview {
         crate::adjustments::PREVIEW_EDGE,
     );
     let shown = with_layer_opacity(&rendered, opacity);
-    let (below, above) = base
-        .as_ref()
-        .map(|content| content.preview_around(layer))
-        .unwrap_or((None, None));
+    let backdrop = backdrop.unwrap_or_else(|| {
+        base.as_ref()
+            .map(|content| prepare_gradient_backdrop(content, layer))
+            .unwrap_or(GradientBackdrop {
+                below: None,
+                above: None,
+            })
+    });
     GradientPreview {
-        below: below.as_ref().map(document::preview_render),
-        above: above.as_ref().map(document::preview_render),
+        below: backdrop.below,
+        above: backdrop.above,
         sprite: document::preview_render(&shown),
         offset,
         size: source.dimensions(),
+    }
+}
+
+// A single full-canvas Normal layer at full opacity already equals its
+// partition composite, unless transparent pixels carry hidden RGB. Reuse only
+// the proven-identical case and retain the existing compositor for every other
+// stack. preview_render keeps exactly the existing dimensions and resampling.
+fn reusable_partition(
+    layers: &[document::RasterLayer],
+    canvas: (u32, u32),
+) -> Option<Option<&RgbaImage>> {
+    let mut visible = layers
+        .iter()
+        .filter(|layer| layer.visible && layer.opacity != 0);
+    let Some(layer) = visible.next() else {
+        return Some(None);
+    };
+    if visible.next().is_some()
+        || layer.offset != (0, 0)
+        || layer.pixels.dimensions() != canvas
+        || layer.opacity != 255
+        || layer.blend_mode != document::BlendMode::Normal
+        || layer.mask.as_ref().is_some_and(|mask| mask.enabled)
+    {
+        return None;
+    }
+    layer
+        .pixels
+        .pixels()
+        .all(|pixel| pixel[3] != 0)
+        .then_some(Some(&layer.pixels))
+}
+
+fn prepare_gradient_backdrop(content: &DocumentContent, layer: LayerId) -> GradientBackdrop {
+    if !content.needs_composite_preview() {
+        let index = content
+            .layer_index(layer)
+            .expect("the gradient layer exists");
+        if let (Some(below), Some(above)) = (
+            reusable_partition(&content.layers()[..index], content.size()),
+            reusable_partition(&content.layers()[index + 1..], content.size()),
+        ) {
+            return GradientBackdrop {
+                below: below.map(document::preview_render),
+                above: above.map(document::preview_render),
+            };
+        }
+    }
+    let (below, above) = content.preview_around(layer);
+    GradientBackdrop {
+        below: below.as_ref().map(document::preview_render),
+        above: above.as_ref().map(document::preview_render),
     }
 }
 
@@ -799,4 +950,179 @@ fn drop_gradient_preview(
         window,
         cx,
     );
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+    use image::Rgba;
+
+    fn scene() -> (DocumentContent, LayerId) {
+        let mut content = DocumentContent::single_layer(
+            "Below".into(),
+            RgbaImage::from_fn(32, 24, |x, y| {
+                Rgba([x as u8 * 7, y as u8 * 9, 100, ((x + y) % 255 + 1) as u8])
+            }),
+        );
+        let layer = content
+            .add_layer(
+                content.top_layer_id(),
+                "Gradient".into(),
+                Rgba([10, 20, 30, 70]),
+            )
+            .unwrap();
+        content
+            .add_layer(layer, "Above".into(), Rgba([160, 90, 30, 190]))
+            .unwrap();
+        (content, layer)
+    }
+
+    fn same_image(actual: Option<&Arc<RenderImage>>, expected: Option<&Arc<RenderImage>>) {
+        match (actual, expected) {
+            (None, None) => {}
+            (Some(actual), Some(expected)) => {
+                assert_eq!(actual.size(0), expected.size(0));
+                assert_eq!(actual.as_bytes(0), expected.as_bytes(0));
+            }
+            _ => panic!("changed a background partition's visibility"),
+        }
+    }
+
+    #[test]
+    fn shortcut_and_fallback_preserve_background_pixels_and_partition_order() {
+        let (original, active) = scene();
+        assert!(reusable_partition(&original.layers()[..1], original.size()).is_some());
+        for case in [
+            "plain",
+            "offset",
+            "opacity",
+            "transparent",
+            "mask",
+            "blend",
+            "hidden",
+            "multiple",
+        ] {
+            let mut layers = original.layers().to_vec();
+            match case {
+                "offset" => layers[0].offset = (-3, 2),
+                "opacity" => layers[0].opacity = 130,
+                "transparent" => {
+                    Arc::make_mut(&mut layers[0].pixels).put_pixel(0, 0, Rgba([200, 100, 50, 0]))
+                }
+                "mask" => {
+                    layers[0].mask = Some(document::LayerMask {
+                        pixels: Arc::new(RgbaImage::from_pixel(32, 24, Rgba([0, 0, 0, 99]))),
+                        enabled: true,
+                    })
+                }
+                "blend" => layers[0].blend_mode = document::BlendMode::Multiply,
+                "hidden" => layers[0].visible = false,
+                "multiple" => {
+                    let mut extra = layers[0].clone();
+                    extra.id = LayerId(999);
+                    layers.insert(0, extra);
+                }
+                _ => {}
+            }
+            let content = DocumentContent::from_layers(32, 24, layers).unwrap();
+            let (below, above) = content.preview_around(active);
+            let expected = GradientBackdrop {
+                below: below.as_ref().map(document::preview_render),
+                above: above.as_ref().map(document::preview_render),
+            };
+            let actual = prepare_gradient_backdrop(&content, active);
+            same_image(actual.below.as_ref(), expected.below.as_ref());
+            same_image(actual.above.as_ref(), expected.above.as_ref());
+        }
+    }
+
+    fn prepared(content: &DocumentContent, layer: LayerId, reverse: bool) -> PreparedGradient {
+        let target = content.layer(layer).unwrap();
+        PreparedGradient {
+            backdrop: None,
+            base: Some(content.clone()),
+            source: target.pixels.clone(),
+            offset: target.offset,
+            opacity: target.opacity,
+            layer,
+            gradient: Gradient {
+                shape: GradientShape::Radial,
+                blend: GradientBlend::ForegroundToTransparent,
+                start: (1., 2.),
+                end: (24., 16.),
+                foreground: Rgba([100, 140, 220, 190]),
+                background: Rgba([200, 20, 10, 20]),
+                ramp: None,
+                reverse,
+            },
+            selection: Selection::from_coverage(32, 24, |x, y| ((x + y) * 4) as u8),
+            canvas: content.size(),
+            mode: ColorMode::Grayscale,
+            alpha_locked: true,
+        }
+    }
+
+    #[test]
+    fn superseded_gradient_reuses_only_its_unchanged_background_and_keeps_latest_sprite() {
+        let (content, layer) = scene();
+        let first_request = GradientRequest {
+            tab: 3,
+            generation: 7,
+            layer,
+            session: 10,
+            request: 10,
+        };
+        let latest = GradientRequest {
+            request: 11,
+            ..first_request
+        };
+        let first = preview_gradient(prepared(&content, layer, false));
+        assert_eq!(
+            first_request.completion(Some(latest), false),
+            GradientCompletion::KeepBackdrop
+        );
+        assert_eq!(
+            first_request.completion(Some(latest), true),
+            GradientCompletion::Discard
+        );
+        let mut next = prepared(&content, layer, true);
+        next.base = None;
+        let below_id = first.below.as_ref().unwrap().id;
+        let above_id = first.above.as_ref().unwrap().id;
+        next.backdrop = Some(GradientBackdrop {
+            below: first.below,
+            above: first.above,
+        });
+        let next = preview_gradient(next);
+        assert_eq!(next.below.as_ref().unwrap().id, below_id);
+        assert_eq!(next.above.as_ref().unwrap().id, above_id);
+        let uncached = preview_gradient(prepared(&content, layer, true));
+        same_image(Some(&next.sprite), Some(&uncached.sprite));
+        assert_ne!(first.sprite.as_bytes(0), next.sprite.as_bytes(0));
+        assert_eq!(
+            latest.completion(Some(latest), false),
+            GradientCompletion::Publish
+        );
+        for current in [
+            None,
+            Some(GradientRequest { tab: 4, ..latest }),
+            Some(GradientRequest {
+                generation: 8,
+                ..latest
+            }),
+            Some(GradientRequest {
+                layer: LayerId(999),
+                ..latest
+            }),
+            Some(GradientRequest {
+                session: 12,
+                ..latest
+            }),
+        ] {
+            assert_eq!(
+                first_request.completion(current, false),
+                GradientCompletion::Discard
+            );
+        }
+    }
 }

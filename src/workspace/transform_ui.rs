@@ -6,6 +6,7 @@ use image::RgbaImage;
 use super::Workspace;
 use super::canvas_tools::PreviewGeometry;
 use super::layers::{self, MovePaint};
+use super::preview_backdrop::{Backdrop, PreviewContext};
 use crate::commands::{
     CanvasSize, ImageAdjust, LayerAdjust, ScaleImage, SetGrayscale, SetRgb, Tool,
 };
@@ -449,6 +450,7 @@ impl Workspace {
         self.warp_dirty = false;
         self.warp_applying = false;
         self.warp = None;
+        self.warp_backdrop.reset(window, cx);
         self.warp_error = None;
         self.drop_warp_overlay(window, cx);
     }
@@ -1050,11 +1052,21 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(super) fn warp_preview_context(&self) -> Option<PreviewContext> {
+        let layer = self.warp.as_ref()?.layer;
+        self.preview_context(self.warp_backdrop.epoch, Some(layer), layer)
+            .filter(|context| context.layer == layer)
+    }
+
     fn pump_warp_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.warp_busy || self.warp_applying || !self.warp_dirty || self.warp.is_none() {
             return;
         }
-        let base = if self.warp_overlay.is_none() {
+        let Some(context) = self.warp_preview_context() else {
+            return;
+        };
+        let backdrop = self.warp_backdrop.take(context, window, cx);
+        let base = if self.warp_overlay.is_none() && backdrop.is_none() {
             self.active_tab().map(|tab| tab.document.content.clone())
         } else {
             None
@@ -1109,15 +1121,13 @@ impl Workspace {
                         offset: placed.offset,
                         size: placed.bounds,
                     });
-                    let (below, above) = base
-                        .as_ref()
-                        .map(|content| content.preview_around(layer))
-                        .unwrap_or((None, None));
-                    (
-                        below.as_ref().map(document::preview_render),
-                        above.as_ref().map(document::preview_render),
-                        sprite,
-                    )
+                    let backdrop = backdrop.or_else(|| {
+                        base.as_ref()
+                            .map(|content| Backdrop::prepare(content, Some(layer), layer))
+                    });
+                    let (below, above) =
+                        backdrop.map_or((None, None), |backdrop| (backdrop.below, backdrop.above));
+                    (below, above, sprite)
                 }
                 Err(error) => (None, None, Err(error)),
             };
@@ -1128,15 +1138,33 @@ impl Workspace {
             }
         });
         cx.spawn_in(window, async move |workspace, cx| {
-            let preview = job.await;
+            let mut preview = job.await;
             let _ = workspace.update_in(cx, |workspace, window, cx| {
                 workspace.warp_busy = false;
-                let current = workspace.warp.is_some()
+                let current_context = workspace.warp_preview_context();
+                let current = current_context == Some(context)
                     && workspace.warp_token == token
                     && workspace.preferences.warp_resample == resample
                     && (!workspace.warp_dirty
                         || workspace.warp.as_ref().is_some_and(WarpSession::dragging));
                 if !current {
+                    if preview.sprite.is_ok() {
+                        let backdrop = Backdrop {
+                            below: preview.below.take(),
+                            above: preview.above.take(),
+                        };
+                        let discarded = workspace.warp_backdrop.retain(
+                            context,
+                            current_context,
+                            workspace.warp_overlay.is_some(),
+                            backdrop,
+                        );
+                        super::drop_images(
+                            discarded.into_iter().flat_map(Backdrop::into_images),
+                            window,
+                            cx,
+                        );
+                    }
                     drop_preview(preview, window, cx);
                 } else {
                     workspace.publish_warp_preview(preview, window, cx);

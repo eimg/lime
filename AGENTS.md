@@ -170,8 +170,9 @@ selection inside its original bounds, centered with pixel rounding. Free release
 the constraint without reshaping it. Typed ratio previews use the field-start
 geometry; empty input/Escape restores the ratio and geometry. Selection changes
 commit one selection-only undo step; crop stays a draft until Apply. During a
-selection commit, the latest ratio click waits for completion and validates the
-original tab/layer/tool/generation; switching context discards the queued choice. Sample or set swatches and fill
+selection commit, radius, aspect-ratio, and Antialias clicks share an ordered queue. Each completion
+revalidates the original tab/layer/tool and expected generation before continuing;
+switching context discards the remaining queued edits. Sample or set swatches and fill
 connected regions on the active layer.
 One shared recent list holds 12 unique RGB colors across tabs and all color
 pickers. Accepting foreground/background, Text, Drop Shadow, Stroke, and gradient-stop
@@ -759,6 +760,13 @@ document is a single plain layer without paths, guides, or editable text.
   interpolation. `src/workspace/gradient_ui.rs` shares one specification between
   the coalesced preview and Apply, owns the persistent current palette and named
   library UI, and preserves geometry when loading presets. Apply/Cancel remain above the stop editor.
+  A superseded initial gradient sprite retains its prepared below/above images
+  only for the same tab/generation/layer/session; the latest request reuses them
+  without publishing stale gradient geometry or parameters. Ownership transfers
+  to the worker/overlay, and cancellation releases waiting images. A single
+  full-canvas Normal background at full opacity with nonzero pixel alpha can
+  bypass compositing because its pixels already equal that partition. Other
+  stacks retain the existing compositor, preview resolution, and resampling.
 - `src/gradient/library.rs` validates the version 1 JSON gradient library,
   including IDs, unique names, at most 32 entries, 2–8 strictly ordered stops,
   and a 256 KiB file bound. `ColorRamp::from_stops` validates reconstruction.
@@ -1360,8 +1368,23 @@ app backups, and project build caches can be removed when cleanup is requested.
   Adjustment, filter, and Text Along Path dialogs retain their comparison preview
   and disable controls with Applying… until canvas publication, then dismiss.
   Rectangle radius steps accumulate individually clamped desired values during
-  selection commits; the readout shows that desired value. Deferred changes validate
-  tab, layer, tool, and generation and are discarded on context changes.
+  selection commits; the readout shows that desired value. Radius, aspect-ratio,
+  and Antialias inputs share one FIFO; only adjacent radius requests coalesce. The dispatcher
+  holds the tail outside gesture cleanup while starting each edit, then restores
+  it for that exact selection commit. Each completion revalidates tab, layer,
+  tool, and generation; context changes discard the tail. Preference-only choices
+  continue draining without waiting for a nonexistent background completion.
+  Antialias finishes numeric geometry first. A lightweight control-state projection
+  applies the in-flight ratio/Antialias request and queued edits in order, without
+  building masks on the UI thread. Radius admission clamps against that projected
+  geometry, and Antialias activation reads its latest projected quality rather
+  than a render-time value. Both readouts reject stale tab/layer/tool/generation
+  contexts; completion or gesture cancellation clears the in-flight marker.
+- `src/workspace/preview_backdrop.rs` transfers unchanged background images between
+  superseded Text/Scale/warp startup jobs and the next worker. Reuse validates
+  tab, document generation, active layer, tool, target/insertion point, and a
+  session epoch; cancellation/restart releases waiting ownership. Stale sprites
+  retain their existing publication rules. Empty partitions count as prepared.
 - Warp preview resolution follows transformed bounds, zoom, and display scale,
   capped at 2048 pixels per edge without source upscaling. Only the transformed
   sprite changes resolution; ordinary Move and unaffected layers keep their
@@ -1377,7 +1400,12 @@ app backups, and project build caches can be removed when cleanup is requested.
   by ordinary source-over: partial backdrop alpha would be wrong.
 - `src/workspace/composite_preview.rs` retains the immediate normal-stack sprite
   path, and coalesces one background full-stack preview for backdrop-dependent
-  stacks. Its key uses the GPUI image ID, tab generation, target, offset, and size.
+  stacks. Its key uses the GPUI image ID, tab generation, target, offset, size,
+  active layer, tool, and session epoch. A single worker publishes completed
+  same-session frames during continuous input, then schedules the latest request;
+  exact request equality only suppresses redundant jobs. Completion reads live
+  context before publication, rejecting canceled/restarted sessions even before
+  the next render. Settling Text/Move handoffs retain their visible identity.
   Stale/canceled images are dropped. Complex stacks skip unused full-resolution
   below/above split composites before the bounded frame is ready. Canvas previews
   cap at 1024 pixels per edge;

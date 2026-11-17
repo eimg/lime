@@ -875,7 +875,7 @@ impl Workspace {
         let body = div().flex().flex_col().gap_2()
             .when(matches!(self.preferences.tool, Tool::Select | Tool::OvalSelect), |panel| panel.child(
                 toggle_button("Antialias edges", antialias).on_click(cx.listener(
-                    move |this, _, window, cx| this.set_selection_antialias(!antialias, window, cx),
+                    |this, _, window, cx| this.toggle_selection_antialias(window, cx),
                 ))
             ))
             .when(self.preferences.tool == Tool::FreeSelect, |panel| panel.child(

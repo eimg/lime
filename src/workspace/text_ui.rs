@@ -10,6 +10,7 @@ use super::Workspace;
 use super::dialogs::{Field, FieldMode};
 use super::layers::MovePaint;
 use super::numeric::NumericField;
+use super::preview_backdrop::{Backdrop, PreviewContext};
 use super::settings_ui::ToolSection;
 use super::view::{
     ACCENT, BORDER, CANVAS, HOVER, MUTED, SELECTED, TEXT, choice_button, info_note, option_action,
@@ -1435,6 +1436,11 @@ impl Workspace {
     pub(super) fn text_preview_target(&self) -> Option<(Option<LayerId>, LayerId)> {
         self.text_draft
             .as_ref()
+            .or_else(|| {
+                self.active_tab()
+                    .filter(|tab| self.text_settled == Some(tab.id))
+                    .and_then(|tab| tab.pending_text.as_ref())
+            })
             .map(|draft| (draft.layer, draft.above))
     }
 
@@ -1980,6 +1986,7 @@ impl Workspace {
             cx,
         );
         let started = self.active_tab().is_some_and(|tab| tab.busy());
+        self.text_backdrop.clear(window, cx);
         // Any preview still rendering belongs to the closed draft.
         self.text_generation = self.text_generation.wrapping_add(1);
         self.text_dirty = false;
@@ -2004,6 +2011,7 @@ impl Workspace {
         };
         draft.generation = self.tabs[index].history.generation();
         self.preferences.tool = crate::commands::Tool::Text;
+        self.text_backdrop.reset(window, cx);
         self.text_draft = Some(draft);
         self.caret_shown_at = std::time::Instant::now();
         self.start_caret_blink(window, cx);
@@ -2039,6 +2047,7 @@ impl Workspace {
         self.text_dirty = false;
         self.text_error = None;
         self.text_draft = None;
+        self.text_backdrop.reset(window, cx);
         if self.text_settled.is_none()
             && let Some(overlay) = self.text_overlay.take()
         {
@@ -2129,9 +2138,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.active_tab() else {
-            return;
-        };
+        self.text_backdrop.reset(window, cx);
+        let Some(tab) = self.active_tab() else { return };
         let rendered = Arc::new(rendered);
         self.text_draft = Some(TextDraft {
             tab: tab.id,
@@ -2299,6 +2307,12 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(super) fn text_preview_context(&self) -> Option<PreviewContext> {
+        let draft = self.text_draft.as_ref()?;
+        self.preview_context(self.text_backdrop.epoch, draft.layer, draft.above)
+            .filter(|context| context.tab == draft.tab && context.generation == draft.generation)
+    }
+
     fn pump_text_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.text_busy || !self.text_dirty {
             return;
@@ -2311,9 +2325,11 @@ impl Workspace {
             .map_or(crate::transform::ColorMode::Rgb, |document| {
                 document.content.mode()
             });
-        let base = self
-            .text_overlay
-            .is_none()
+        let Some(context) = self.text_preview_context() else {
+            return;
+        };
+        let backdrop = self.text_backdrop.take(context, window, cx);
+        let base = (self.text_overlay.is_none() && backdrop.is_none())
             .then(|| {
                 self.active_document()
                     .map(|document| document.content.clone())
@@ -2336,19 +2352,15 @@ impl Workspace {
             let substitution = text::substitution(&rendered.style);
             let shown = text_preview_pixels(&rendered.image, draft.opacity, mode);
             let sprite = document::preview_render(&shown);
-            let (below, above) = base
-                .as_ref()
-                .map(|content| {
-                    if let Some(layer) = draft.layer {
-                        content.preview_around(layer)
-                    } else {
-                        content.preview_at_insertion(draft.above)
-                    }
-                })
-                .unwrap_or((None, None));
+            let backdrop = backdrop.or_else(|| {
+                base.as_ref()
+                    .map(|content| Backdrop::prepare(content, draft.layer, draft.above))
+            });
+            let (below, above) =
+                backdrop.map_or((None, None), |backdrop| (backdrop.below, backdrop.above));
             let overlay = MovePaint {
-                below: below.as_ref().map(document::preview_render),
-                above: above.as_ref().map(document::preview_render),
+                below,
+                above,
                 sprite,
                 offset: rendered.style.offset_for(draft.anchor),
                 size: rendered.image.dimensions(),
@@ -2359,8 +2371,21 @@ impl Workspace {
             let result = job.await;
             let _ = workspace.update_in(cx, |workspace, window, cx| {
                 workspace.text_busy = false;
-                if workspace.text_generation != token || workspace.text_draft.is_none() {
-                    if let Ok((_, _, _, overlay)) = result {
+                let current = workspace.text_preview_context();
+                if workspace.text_generation != token || current != Some(context) {
+                    if let Ok((_, _, _, mut overlay)) = result {
+                        let backdrop = Backdrop::take(&mut overlay);
+                        let discarded = workspace.text_backdrop.retain(
+                            context,
+                            current,
+                            workspace.text_overlay.is_some(),
+                            backdrop,
+                        );
+                        super::drop_images(
+                            discarded.into_iter().flat_map(Backdrop::into_images),
+                            window,
+                            cx,
+                        );
                         super::drop_images(overlay.into_images(), window, cx);
                     }
                 } else {
