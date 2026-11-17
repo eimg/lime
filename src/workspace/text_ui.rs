@@ -173,6 +173,9 @@ pub(super) struct TextCaret {
 
 #[derive(Clone)]
 pub(super) struct TextDraft {
+    runs: Vec<text::StyleRun>,
+    insertion: Option<text::CharacterStyle>,
+    all_text: bool,
     tab: usize,
     generation: u64,
     above: LayerId,
@@ -203,8 +206,11 @@ pub(super) struct TextDraft {
     redo: Vec<TextEdit>,
 }
 
-#[derive(Clone)]
-struct TextEdit {
+#[derive(Clone, PartialEq)]
+pub(super) struct TextEdit {
+    runs: Vec<text::StyleRun>,
+    insertion: Option<text::CharacterStyle>,
+    all_text: bool,
     source: String,
     cursor: usize,
     cursor_affinity: CaretAffinity,
@@ -245,6 +251,13 @@ pub(super) struct RecoveryText {
     above: LayerId,
 }
 
+#[derive(serde::Deserialize)]
+struct StyledClipboard {
+    lime_styled_text: u32,
+    source: String,
+    runs: Vec<text::StyleRun>,
+}
+
 impl TextDraft {
     pub(super) fn recovery_signature(&self) -> RecoveryText {
         RecoveryText {
@@ -269,7 +282,7 @@ impl TextDraft {
             return None;
         }
         Some(
-            serde_json::json!({"source": self.source, "family": self.family, "size": self.size,
+            serde_json::json!({"runs": self.runs, "source": self.source, "family": self.family, "size": self.size,
             "bold": self.face.bold, "italic": self.face.italic, "color": self.color.0,
             "letter_spacing": self.spacing.letter, "line_spacing": self.spacing.line,
             "layout": self.layout, "anchor": self.anchor, "layer": self.layer.map(|id| id.0), "above": self.above.0}),
@@ -291,6 +304,8 @@ impl TextDraft {
             self.selection_anchor = None;
         }
         self.cursor = byte;
+        self.insertion = None;
+        self.all_text = false;
         self.cursor_affinity = CaretAffinity::Downstream;
     }
 
@@ -394,9 +409,7 @@ impl TextDraft {
             self.selection_anchor = None;
             return false;
         };
-        self.cursor = range.start;
-        self.cursor_affinity = CaretAffinity::Downstream;
-        self.source.replace_range(range, "");
+        self.replace_range(range, "", &[]);
         self.selection_anchor = None;
         true
     }
@@ -414,17 +427,87 @@ impl TextDraft {
             return false;
         }
         let range = target.min(self.cursor)..target.max(self.cursor);
-        self.cursor = range.start;
-        self.cursor_affinity = CaretAffinity::Downstream;
-        self.source.replace_range(range, "");
+        self.replace_range(range, "", &[]);
         true
     }
 
+    fn current_style(&self) -> text::CharacterStyle {
+        if let Some(range) = self.selected_range() {
+            return self.spec().style_at(range.start);
+        }
+        self.insertion.clone().unwrap_or_else(|| {
+            let byte = if self.cursor > 0 && self.cursor_affinity == CaretAffinity::Upstream {
+                grapheme_boundary(&self.source, self.cursor, false)
+            } else {
+                self.cursor
+            };
+            self.spec().style_at(byte)
+        })
+    }
+
+    fn target_styles(&self) -> Vec<text::CharacterStyle> {
+        if let Some(range) = self.selected_range() {
+            self.spec().styles_in(range)
+        } else if self.all_text {
+            self.spec().styles_in(0..self.source.len())
+        } else {
+            vec![self.current_style()]
+        }
+    }
+
+    fn format(&mut self, change: impl Fn(&mut text::CharacterStyle)) -> bool {
+        if let Some(range) = self
+            .selected_range()
+            .or_else(|| self.all_text.then_some(0..self.source.len()))
+        {
+            let mut spec = self.spec();
+            spec.format_range(range, &change);
+            let changed = self.runs != spec.runs;
+            self.runs = spec.runs;
+            self.insertion = None;
+            changed
+        } else {
+            let mut style = self.current_style();
+            let previous = style.clone();
+            change(&mut style);
+            self.insertion = Some(style);
+            self.insertion.as_ref() != Some(&previous)
+        }
+    }
+
+    fn replace_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        value: &str,
+        runs: &[text::StyleRun],
+    ) {
+        let style = self.current_style();
+        let mut spec = self.spec();
+        let cursor = range.start + value.len();
+        spec.replace_styled(range, value, &style, runs);
+        self.source = spec.source;
+        self.runs = spec.runs;
+        // Joining a combining sequence may move the valid insertion boundary.
+        self.cursor =
+            unicode_segmentation::UnicodeSegmentation::grapheme_indices(self.source.as_str(), true)
+                .map(|(i, _)| i)
+                .chain(std::iter::once(self.source.len()))
+                .find(|i| *i >= cursor)
+                .unwrap_or(self.source.len());
+        self.selection_anchor = None;
+        self.all_text = false;
+        self.insertion = Some(if runs.is_empty() {
+            style
+        } else {
+            self.spec()
+                .style_at(grapheme_boundary(&self.source, self.cursor, false))
+        });
+        self.cursor_affinity = CaretAffinity::Upstream;
+    }
+
     fn replace_selection(&mut self, text: &str) {
-        self.delete_selection();
-        self.source.insert_str(self.cursor, text);
-        self.cursor += text.len();
-        self.cursor_affinity = CaretAffinity::Downstream;
+        let range = self.selected_range().unwrap_or(self.cursor..self.cursor);
+        self.replace_range(range, text, &[]);
     }
 
     fn stop_pointer(&mut self) {
@@ -460,6 +543,7 @@ impl TextDraft {
 
     fn spec(&self) -> TextSpec {
         TextSpec {
+            runs: self.runs.clone(),
             source: self.source.clone(),
             family: self.family.clone(),
             face: self.face,
@@ -482,8 +566,11 @@ impl TextDraft {
         }
     }
 
-    fn state(&self) -> TextEdit {
+    pub(super) fn state(&self) -> TextEdit {
         TextEdit {
+            runs: self.runs.clone(),
+            insertion: self.insertion.clone(),
+            all_text: self.all_text,
             source: self.source.clone(),
             cursor: self.cursor,
             cursor_affinity: self.cursor_affinity,
@@ -498,7 +585,10 @@ impl TextDraft {
         }
     }
 
-    fn restore(&mut self, state: TextEdit) {
+    pub(super) fn restore(&mut self, state: TextEdit) {
+        self.runs = state.runs;
+        self.insertion = state.insertion;
+        self.all_text = state.all_text;
         self.source = state.source;
         self.cursor = state.cursor;
         self.cursor_affinity = state.cursor_affinity;
@@ -583,7 +673,7 @@ impl TextDraft {
             left = left.min(ax + stop.x);
             right = right.max(ax + stop.x);
             top = top.min(ay + stop.top);
-            bottom = bottom.max(ay + stop.top + self.carets.line_height);
+            bottom = bottom.max(ay + stop.top + stop.height);
         }
         bottom = bottom.max(ay + self.size * self.spacing.line);
         if self.source.is_empty() {
@@ -685,25 +775,132 @@ impl Workspace {
         })
     }
 
+    fn selected_text_style(&self) -> Option<&text::TextStyle> {
+        let tab = self.active_tab()?;
+        tab.document.content.layer(tab.active_layer)?.text.as_ref()
+    }
+
+    pub(super) fn prepare_text_format(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.text_draft.is_some() {
+            return;
+        }
+        let Some(tab) = self.active_tab().filter(|tab| !tab.busy()) else {
+            return;
+        };
+        let Some(layer) = tab
+            .document
+            .content
+            .layer(tab.active_layer)
+            .filter(|layer| layer.visible)
+        else {
+            return;
+        };
+        let Some(style) = layer.text.clone() else {
+            return;
+        };
+        self.open_draft(
+            Some(layer.id),
+            style.anchor(layer.offset),
+            text::RenderedText {
+                image: layer.pixels.clone(),
+                style,
+            },
+            layer.opacity,
+            None,
+            window,
+            cx,
+        );
+    }
+
+    fn text_target_styles(&self) -> Vec<text::CharacterStyle> {
+        if let Some(draft) = &self.text_draft {
+            return draft.target_styles();
+        }
+        if let Some(style) = self.selected_text_style() {
+            return style.spec().styles_in(0..style.source.len());
+        }
+        let defaults = &self.preferences.text_defaults;
+        vec![text::CharacterStyle {
+            family: defaults.family.clone(),
+            face: defaults.face,
+            size: defaults.size,
+            color: document::solid_color(self.color_memory.swatches[0]).0,
+        }]
+    }
+
+    fn text_control_style(&self) -> text::CharacterStyle {
+        self.text_target_styles()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| self.text_draft.as_ref().unwrap().current_style())
+    }
+
+    fn text_property_mixed<T: PartialEq>(
+        &self,
+        property: impl Fn(&text::CharacterStyle) -> T,
+    ) -> bool {
+        let styles = self.text_target_styles();
+        styles.first().is_some_and(|first| {
+            styles
+                .iter()
+                .any(|style| property(style) != property(first))
+        })
+    }
+
+    pub(super) fn text_size_mixed(&self) -> bool {
+        self.text_property_mixed(|style| style.size)
+    }
+    pub(super) fn text_color_mixed(&self) -> bool {
+        self.text_property_mixed(|style| style.color)
+    }
+
+    pub(super) fn text_format_target(&self) -> &'static str {
+        match &self.text_draft {
+            Some(draft) if draft.selected_range().is_some() => "Selected text",
+            Some(draft) if !draft.all_text => "New typing",
+            _ if self.selected_text_style().is_some() => "All text",
+            _ => "New text",
+        }
+    }
+
+    pub(super) fn finish_text_format(&mut self, before: TextEdit) {
+        if let Some(draft) = &mut self.text_draft
+            && draft.state() != before
+        {
+            draft.record(before);
+        }
+    }
+
+    pub(super) fn restore_text_format(
+        &mut self,
+        state: TextEdit,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(draft) = self.text_draft.as_mut() {
+            draft.restore(state);
+            self.preferences.text_defaults.size = draft.current_style().size;
+        }
+        self.request_text_preview(window, cx);
+    }
+
     pub(super) fn text_options(&self, panel: Div, cx: &Context<Self>) -> Div {
         let draft = self.text_draft.as_ref();
-        let family = draft.map_or(self.preferences.text_defaults.family.clone(), |draft| {
-            draft.family.clone()
-        });
-        let face = draft.map_or(self.preferences.text_defaults.face, |draft| draft.face);
-        let color = draft.map_or_else(
-            || self.color_memory.swatches[0],
-            |draft| {
-                let [red, green, blue, _] = draft.color.0;
-                u32::from_be_bytes([0, red, green, blue])
-            },
-        );
+        let style = self.text_control_style();
+        let family = if self.text_property_mixed(|s| s.family.clone()) {
+            "Mixed".to_owned()
+        } else {
+            style.family.clone()
+        };
+        let face = style.face;
+        let color = u32::from_be_bytes([0, style.color[0], style.color[1], style.color[2]]);
         let substituted = draft.and_then(|draft| draft.substitution.clone());
         let layout = self.text_layout();
         let can_rasterize = self
             .active_tab()
             .is_some_and(|tab| !tab.busy() && tab.document.content.layer_is_text(tab.active_layer));
         panel
+            .child(info_note(self.text_format_target()))
             .when_some(substituted, |panel, message| {
                 panel.child(info_note(message))
             })
@@ -730,13 +927,15 @@ impl Workspace {
                             .border_color(rgb(BORDER))
                             .bg(rgb(color)),
                     )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(TEXT))
-                            .child(format!("#{color:06X}")),
-                    )
+                    .child(div().text_size(px(12.)).text_color(rgb(TEXT)).child(
+                        if self.text_color_mixed() {
+                            "Mixed".to_owned()
+                        } else {
+                            format!("#{color:06X}")
+                        },
+                    ))
                     .on_click(cx.listener(|this, _, window, cx| {
+                        this.prepare_text_format(window, cx);
                         let swatch = if this.text_draft.is_some() {
                             TEXT_SWATCH
                         } else {
@@ -752,20 +951,34 @@ impl Workspace {
                     .flex()
                     .gap_2()
                     .child(
-                        toggle_button("Bold", face.bold)
-                            .flex_1()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_text_face(true, window, cx)
-                            })),
+                        toggle_button(
+                            if self.text_property_mixed(|s| s.face.bold) {
+                                "Bold · Mixed"
+                            } else {
+                                "Bold"
+                            },
+                            face.bold && !self.text_property_mixed(|s| s.face.bold),
+                        )
+                        .flex_1()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_text_face(true, window, cx)
+                        })),
                     )
                     .child(
-                        toggle_button("Italic", face.italic)
-                            .flex_1()
-                            .italic()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_text_face(false, window, cx)
-                            })),
+                        toggle_button(
+                            if self.text_property_mixed(|s| s.face.italic) {
+                                "Italic · Mixed"
+                            } else {
+                                "Italic"
+                            },
+                            face.italic && !self.text_property_mixed(|s| s.face.italic),
+                        )
+                        .flex_1()
+                        .italic()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_text_face(false, window, cx)
+                        })),
                     ),
             )
             .child(option_row(
@@ -904,7 +1117,7 @@ impl Workspace {
                             .carets
                             .stops
                             .last()
-                            .is_some_and(|stop| stop.top + draft.carets.line_height > height as f32)
+                            .is_some_and(|stop| stop.top + stop.height > height as f32)
                     })
                 }),
                 |panel| {
@@ -971,16 +1184,11 @@ impl Workspace {
     }
 
     fn reset_font_match(&mut self) {
-        let family = self
-            .text_draft
-            .as_ref()
-            .map_or(self.preferences.text_defaults.family.as_str(), |draft| {
-                draft.family.as_str()
-            });
+        let family = self.text_control_style().family;
         self.font_search.selected = self
             .font_entries()
             .iter()
-            .position(|(_, name, _)| name.eq_ignore_ascii_case(family))
+            .position(|(_, name, _)| name.eq_ignore_ascii_case(&family))
             .unwrap_or(0);
         self.font_scroll.scroll_to_item(self.font_search.selected);
     }
@@ -1316,6 +1524,8 @@ impl Workspace {
     pub(super) fn restore_text_recovery(&mut self, id: usize, value: serde_json::Value) -> bool {
         #[derive(serde::Deserialize)]
         struct Draft {
+            #[serde(default)]
+            runs: Vec<text::StyleRun>,
             source: String,
             family: String,
             size: f32,
@@ -1337,7 +1547,8 @@ impl Workspace {
             letter: saved.letter_spacing,
             line: saved.line_spacing,
         };
-        if saved.source.chars().count() > MAX_TEXT_CHARS
+        if !text::runs::allowed(&saved.source, &saved.runs)
+            || saved.source.chars().count() > MAX_TEXT_CHARS
             || saved.family.chars().count() > text::MAX_FAMILY_CHARS
             || !saved.size.is_finite()
             || !(MIN_PIXEL_SIZE..=MAX_PIXEL_SIZE).contains(&saved.size)
@@ -1372,6 +1583,7 @@ impl Workspace {
                 text::RenderedText {
                     image: Arc::new(image::RgbaImage::new(1, 1)),
                     style: text::TextStyle {
+                        runs: Vec::new(),
                         source: String::new(),
                         family: saved.family.clone(),
                         face: FontFace {
@@ -1392,6 +1604,9 @@ impl Workspace {
         };
         let baseline = Arc::new(baseline);
         self.tabs[index].pending_text = Some(TextDraft {
+            runs: saved.runs,
+            insertion: None,
+            all_text: false,
             tab: id,
             generation: tab.history.generation(),
             above: if layer.is_none() {
@@ -1445,15 +1660,20 @@ impl Workspace {
     }
 
     pub(super) fn text_layout(&self) -> TextLayout {
-        self.text_draft
-            .as_ref()
-            .map_or(self.preferences.text_defaults.layout, |draft| draft.layout)
+        self.text_draft.as_ref().map_or_else(
+            || {
+                self.selected_text_style()
+                    .map_or(self.preferences.text_defaults.layout, |style| style.layout)
+            },
+            |draft| draft.layout,
+        )
     }
 
     fn set_text_layout(&mut self, layout: TextLayout, window: &mut Window, cx: &mut Context<Self>) {
         if !layout.allowed() {
             return;
         }
+        self.prepare_text_format(window, cx);
         self.preferences.text_defaults.layout = layout;
         self.change_text(window, cx, |draft| {
             if draft.layout == layout {
@@ -1485,25 +1705,26 @@ impl Workspace {
     }
 
     pub(super) fn text_size(&self) -> f32 {
-        self.text_draft
-            .as_ref()
-            .map_or(self.preferences.text_defaults.size, |draft| draft.size)
+        self.text_control_style().size
+    }
+
+    fn text_spacing(&self) -> Spacing {
+        self.text_draft.as_ref().map_or_else(
+            || {
+                self.selected_text_style()
+                    .map_or(self.preferences.text_defaults.spacing, |style| {
+                        style.spacing
+                    })
+            },
+            |draft| draft.spacing,
+        )
     }
 
     pub(super) fn text_line_spacing(&self) -> f32 {
-        self.text_draft
-            .as_ref()
-            .map_or(self.preferences.text_defaults.spacing.line, |draft| {
-                draft.spacing.line
-            })
+        self.text_spacing().line
     }
-
     pub(super) fn text_letter_spacing(&self) -> f32 {
-        self.text_draft
-            .as_ref()
-            .map_or(self.preferences.text_defaults.spacing.letter, |draft| {
-                draft.spacing.letter
-            })
+        self.text_spacing().letter
     }
 
     pub(super) fn set_text_letter_spacing(
@@ -1520,13 +1741,8 @@ impl Workspace {
     pub(super) fn set_text_size(&mut self, size: f32, window: &mut Window, cx: &mut Context<Self>) {
         let size = size.round().clamp(MIN_PIXEL_SIZE, MAX_PIXEL_SIZE);
         self.preferences.text_defaults.size = size;
-        self.change_text(window, cx, |draft| {
-            if draft.size == size {
-                return false;
-            }
-            draft.size = size;
-            true
-        });
+        self.prepare_text_format(window, cx);
+        self.change_text(window, cx, |draft| draft.format(|style| style.size = size));
     }
 
     pub(super) fn set_text_line_spacing(
@@ -1536,12 +1752,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let line = ((line * 100.0).round() / 100.0).clamp(MIN_LINE_SPACING, MAX_LINE_SPACING);
-        let letter = self
-            .text_draft
-            .as_ref()
-            .map_or(self.preferences.text_defaults.spacing.letter, |draft| {
-                draft.spacing.letter
-            });
+        let letter = self.text_letter_spacing();
         self.set_text_spacing(Spacing { letter, line }, window, cx);
     }
 
@@ -1552,12 +1763,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let current = self
-            .text_draft
-            .as_ref()
-            .map_or(self.preferences.text_defaults.spacing, |draft| {
-                draft.spacing
-            });
+        let current = self.text_spacing();
         let next = Spacing {
             letter: (current.letter + letter)
                 .round()
@@ -1569,6 +1775,7 @@ impl Workspace {
     }
 
     fn set_text_spacing(&mut self, spacing: Spacing, window: &mut Window, cx: &mut Context<Self>) {
+        self.prepare_text_format(window, cx);
         self.preferences.text_defaults.spacing = spacing;
         self.change_text(window, cx, |draft| {
             if draft.spacing == spacing {
@@ -1582,29 +1789,34 @@ impl Workspace {
     fn set_text_family(&mut self, family: String, window: &mut Window, cx: &mut Context<Self>) {
         let family = text::normalize_family(&family);
         self.preferences.text_defaults.family = family.clone();
+        self.prepare_text_format(window, cx);
         self.change_text(window, cx, |draft| {
-            if draft.family == family {
-                return false;
-            }
-            draft.family = family;
-            true
+            draft.format(|style| style.family = family.clone())
         });
     }
 
     fn toggle_text_face(&mut self, bold: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let mut face = self
-            .text_draft
-            .as_ref()
-            .map_or(self.preferences.text_defaults.face, |draft| draft.face);
+        let enabled = !self.text_target_styles().iter().all(|style| {
+            if bold {
+                style.face.bold
+            } else {
+                style.face.italic
+            }
+        });
         if bold {
-            face.bold = !face.bold;
+            self.preferences.text_defaults.face.bold = enabled;
         } else {
-            face.italic = !face.italic;
+            self.preferences.text_defaults.face.italic = enabled;
         }
-        self.preferences.text_defaults.face = face;
+        self.prepare_text_format(window, cx);
         self.change_text(window, cx, |draft| {
-            draft.face = face;
-            true
+            draft.format(|style| {
+                if bold {
+                    style.face.bold = enabled;
+                } else {
+                    style.face.italic = enabled;
+                }
+            })
         });
     }
 
@@ -1617,26 +1829,24 @@ impl Workspace {
         }) else {
             return;
         };
+        self.prepare_text_format(window, cx);
         self.change_text(window, cx, |draft| {
-            if draft.color == color {
-                return false;
-            }
-            draft.color = color;
-            true
+            draft.format(|style| style.color = color.0)
         });
     }
 
     pub(super) fn text_color_value(&self) -> Option<u32> {
-        self.text_draft.as_ref().map(|draft| {
-            let [red, green, blue, _] = draft.color.0;
-            u32::from_be_bytes([0, red, green, blue])
-        })
+        if self.text_draft.is_none() && self.selected_text_style().is_none() {
+            return None;
+        }
+        let [red, green, blue, _] = self.text_control_style().color;
+        Some(u32::from_be_bytes([0, red, green, blue]))
     }
 
     /// The caret and any selected text, in canvas pixels, while typing.
     pub(super) fn text_caret(&self) -> Option<TextCaret> {
         let draft = self.text_draft.as_ref()?;
-        if self.active_tab().is_none_or(|tab| tab.id != draft.tab) {
+        if draft.all_text || self.active_tab().is_none_or(|tab| tab.id != draft.tab) {
             return None;
         }
         let (ax, ay) = (draft.anchor.0 as f32, draft.anchor.1 as f32);
@@ -1648,6 +1858,7 @@ impl Workspace {
         let stop = draft
             .carets
             .at_affinity(draft.cursor, draft.cursor_affinity);
+        let line_height = stop.map_or(line_height, |stop| stop.height);
         let (x, top) = stop.map_or((0.0, 0.0), |stop| (stop.x, stop.top));
         let selection = if draft.carets.matches(&draft.spec()) {
             draft
@@ -1803,6 +2014,7 @@ impl Workspace {
             text::RenderedText {
                 image: Arc::new(image::RgbaImage::new(1, 1)),
                 style: text::TextStyle {
+                    runs: Vec::new(),
                     source: String::new(),
                     family: defaults.family.clone(),
                     face: defaults.face,
@@ -1941,9 +2153,9 @@ impl Workspace {
             return false;
         };
         self.preferences.text_defaults = TextDefaults {
-            family: draft.family.clone(),
-            face: draft.face,
-            size: draft.size,
+            family: draft.current_style().family,
+            face: draft.current_style().face,
+            size: draft.current_style().size,
             spacing: draft.spacing,
             layout: draft.layout,
         };
@@ -2142,6 +2354,9 @@ impl Workspace {
         let Some(tab) = self.active_tab() else { return };
         let rendered = Arc::new(rendered);
         self.text_draft = Some(TextDraft {
+            runs: rendered.style.runs.clone(),
+            insertion: None,
+            all_text: layer.is_some() && pending_hit.is_none(),
             tab: tab.id,
             generation: tab.history.generation(),
             above: if layer.is_none() {
@@ -2223,13 +2438,19 @@ impl Workspace {
         mutate: impl FnOnce(&mut TextDraft) -> bool,
     ) {
         self.caret_shown_at = std::time::Instant::now();
+        let numeric_size = self
+            .numeric_edit
+            .as_ref()
+            .is_some_and(|edit| edit.field == NumericField::TextSize);
         let changed = self.text_draft.as_mut().is_some_and(|draft| {
             let previous = draft.state();
             if !mutate(draft) {
                 return false;
             }
             draft.stop_pointer();
-            draft.record(previous);
+            if !numeric_size {
+                draft.record(previous);
+            }
             true
         });
         if changed {
@@ -2265,7 +2486,22 @@ impl Workspace {
             return;
         };
         if let Some(range) = draft.selected_range() {
-            cx.write_to_clipboard(ClipboardItem::new_string(draft.source[range].to_owned()));
+            let mut spec = draft.spec();
+            let source = spec.source[range.clone()].to_owned();
+            let style = spec.style_at(range.start);
+            spec.replace_styled(range.end..spec.source.len(), "", &style, &[]);
+            spec.replace_styled(0..range.start, "", &style, &[]);
+            if spec.runs.is_empty() && !source.is_empty() {
+                spec.runs.push(text::StyleRun {
+                    start: 0,
+                    end: source.len(),
+                    style,
+                });
+            }
+            cx.write_to_clipboard(ClipboardItem::new_string_with_json_metadata(
+                source.clone(),
+                serde_json::json!({"lime_styled_text": 1, "source": source, "runs": spec.runs}),
+            ));
         }
     }
 
@@ -2281,10 +2517,52 @@ impl Workspace {
     }
 
     pub(super) fn paste_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+        let Some(item) = cx.read_from_clipboard() else {
             return;
         };
-        self.insert_text(&text, window, cx);
+        let Some(source) = item.text() else {
+            return;
+        };
+        let runs = item
+            .metadata()
+            .filter(|metadata| metadata.len() <= 4 * 1024 * 1024)
+            .and_then(|metadata| serde_json::from_str::<StyledClipboard>(metadata).ok())
+            .filter(|data| {
+                data.lime_styled_text == 1
+                    && data.source == source
+                    && clean_text(&source) == source
+                    && text::runs::allowed(&source, &data.runs)
+            })
+            .map(|data| data.runs);
+        if let Some(mut runs) = runs {
+            if let Some(tab) = self.active_tab() {
+                for run in &mut runs {
+                    run.style.color = tab
+                        .document
+                        .content
+                        .mode()
+                        .constrain(image::Rgba(run.style.color))
+                        .0;
+                }
+            }
+            let Some(draft) = &self.text_draft else {
+                return;
+            };
+            let range = draft.selected_range().unwrap_or(draft.cursor..draft.cursor);
+            if draft.source.chars().count() - draft.source[range.clone()].chars().count()
+                + source.chars().count()
+                > MAX_TEXT_CHARS
+            {
+                self.notice(TextError::TooLong.message(), cx);
+                return;
+            }
+            self.change_text(window, cx, |draft| {
+                draft.replace_range(range, &source, &runs);
+                true
+            });
+        } else {
+            self.insert_text(&source, window, cx);
+        }
     }
 
     pub(super) fn select_all_text(&mut self, cx: &mut Context<Self>) {
@@ -2292,6 +2570,8 @@ impl Workspace {
             && !draft.source.is_empty()
         {
             draft.stop_pointer();
+            draft.insertion = None;
+            draft.all_text = false;
             draft.selection_anchor = Some(0);
             draft.cursor = draft.source.len();
             draft.cursor_affinity = CaretAffinity::Downstream;
@@ -2463,4 +2743,86 @@ fn clean_text(text: &str) -> String {
 
 fn clamp_i32(value: i64) -> i32 {
     i32::try_from(value).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX })
+}
+
+#[cfg(test)]
+mod mixed_style_tests {
+    use super::*;
+
+    #[test]
+    fn formatting_typing_history_and_recovery_keep_all_styles() {
+        let spec = text::runs::tests::sample("one two");
+        let rendered = Arc::new(text::render_spec(&spec).unwrap());
+        let mut draft = TextDraft {
+            runs: Vec::new(),
+            insertion: None,
+            all_text: false,
+            tab: 1,
+            generation: 0,
+            above: LayerId(1),
+            opacity: 255,
+            substitution: None,
+            layer: None,
+            anchor: (0, 0),
+            source: spec.source.clone(),
+            cursor: 7,
+            cursor_affinity: CaretAffinity::Downstream,
+            selection_anchor: Some(4),
+            family: spec.family,
+            face: spec.face,
+            size: spec.size,
+            color: spec.color,
+            spacing: spec.spacing,
+            layout: spec.layout,
+            rendered: rendered.clone(),
+            carets: Arc::new(CaretMap::default()),
+            pending_hit: None,
+            pending_extend: false,
+            pending_drag_hit: None,
+            dragging: false,
+            baseline: rendered,
+            baseline_anchor: (0, 0),
+            undo: Vec::new(),
+            redo: Vec::new(),
+        };
+        let initial = draft.state();
+        assert!(draft.format(|style| {
+            style.size = 40.;
+            style.face.bold = true;
+        }));
+        draft.record(initial);
+        let formatted = draft.spec();
+        assert!(!formatted.style_at(0).face.bold);
+        assert!(formatted.style_at(4).face.bold);
+        assert!(draft.step_history(false));
+        assert!(draft.runs.is_empty());
+        assert!(draft.step_history(true));
+        assert_eq!(draft.spec(), formatted);
+        // Restoring a numeric edit restores every run, not just its first size.
+        draft.selection_anchor = Some(0);
+        let before_numeric = draft.state();
+        draft.format(|style| style.size = 60.);
+        draft.restore(before_numeric);
+        assert_eq!(draft.spec(), formatted);
+        draft.move_to(7, false);
+        draft.format(|style| style.color = [255, 0, 0, 255]);
+        assert_eq!(draft.spec(), formatted); // insertion-only format has no pixel edit
+        draft.replace_selection("!");
+        assert_eq!(draft.spec().style_at(7).color, [255, 0, 0, 255]);
+        assert_eq!(draft.spec().style_at(4).color, spec.color.0);
+        assert!(draft.spec().style_at(7).face.bold);
+        let signature = draft.recovery_signature();
+        assert_eq!(signature.spec, draft.spec());
+        let mut content = document::DocumentContent::single_layer(
+            "Background".into(),
+            image::RgbaImage::new(100, 100),
+        );
+        let mut active = content.top_layer_id();
+        draft.above = active;
+        assert!(draft.recovery_content(&mut content, &mut active).is_none());
+        assert_eq!(
+            content.layer(active).unwrap().text.as_ref().unwrap().spec(),
+            draft.spec()
+        );
+    }
 }

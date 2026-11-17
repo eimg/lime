@@ -282,6 +282,7 @@ impl NumericField {
 }
 
 pub(super) struct NumericEdit {
+    text_style: Option<super::text_ui::TextEdit>,
     pub(super) field: NumericField,
     text: String,
     cursor: usize,
@@ -379,6 +380,7 @@ impl NumericEdit {
     fn new(field: NumericField, value: i64, crop: Option<CropRect>) -> Self {
         let text = field.format(value);
         Self {
+            text_style: None,
             field,
             cursor: text.chars().count(),
             text,
@@ -600,6 +602,9 @@ impl Workspace {
                 return;
             }
         }
+        if field == NumericField::TextSize {
+            self.prepare_text_format(window, cx);
+        }
         let Some(value) = self.numeric_value(field) else {
             return;
         };
@@ -615,6 +620,9 @@ impl Workspace {
             return;
         }
         let mut edit = NumericEdit::new(field, value, original_crop);
+        if field == NumericField::TextSize {
+            edit.text_style = self.text_draft.as_ref().map(|draft| draft.state());
+        }
         edit.geometry.ratio = if field.is_selection_ratio() {
             Some((
                 self.preferences.selection_ratio,
@@ -925,6 +933,8 @@ impl Workspace {
             if edit.field.is_move() {
                 self.cancel_move(window, cx);
             }
+        } else if let Some(state) = edit.text_style {
+            self.finish_text_format(state);
         } else if edit.field.is_move() {
             self.finish_move(window, cx);
         } else if edit.field.is_selection()
@@ -1138,7 +1148,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.restore_numeric_values(edit.field, edit.original, edit.geometry, window, cx);
+        if let Some(state) = &edit.text_style {
+            self.restore_text_format(state.clone(), window, cx);
+        } else {
+            self.restore_numeric_values(edit.field, edit.original, edit.geometry, window, cx);
+        }
     }
 
     fn restore_numeric_values(
@@ -1149,6 +1163,15 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if field == NumericField::TextSize
+            && let Some(state) = self
+                .numeric_edit
+                .as_ref()
+                .and_then(|edit| edit.text_style.clone())
+        {
+            self.restore_text_format(state, window, cx);
+            return;
+        }
         if let Some((ratio, value)) = geometry.ratio {
             if field.is_crop_ratio() {
                 self.preferences.crop_ratio = ratio;
@@ -1401,7 +1424,13 @@ impl Workspace {
             .as_ref()
             .filter(|edit| edit.field == field);
         let full_value = edit.map_or_else(
-            || field.format(self.numeric_value(field).unwrap_or(0)),
+            || {
+                if field == NumericField::TextSize && self.text_size_mixed() {
+                    "Mixed".into()
+                } else {
+                    field.format(self.numeric_value(field).unwrap_or(0))
+                }
+            },
             |edit| edit.text.clone(),
         );
         let value = if let Some(edit) = edit {
@@ -1455,6 +1484,9 @@ impl Workspace {
         };
         super::compact_inspector::compact_control(self.numeric_chip_base(field, cx))
             .w_full()
+            .when(field == NumericField::TextSize, |chip| {
+                chip.w(px(super::view::TOOLBOX_FOLDED_WIDTH - 10.))
+            })
             .min_w_0()
             .px(px(2.))
             // Pointer editing owns the shared numeric focus. Do not briefly
@@ -1482,7 +1514,13 @@ impl Workspace {
             .filter(|edit| edit.field == field)
         else {
             let value = self.numeric_value(field).unwrap_or(0);
-            return div().text_size(px(12.)).child(field.format(value));
+            return div().text_size(px(12.)).child(
+                if field == NumericField::TextSize && self.text_size_mixed() {
+                    "Mixed".into()
+                } else {
+                    field.format(value)
+                },
+            );
         };
         let text = div().flex().items_center().text_size(px(12.));
         if edit.selected && !edit.text.is_empty() {

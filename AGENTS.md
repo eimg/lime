@@ -588,8 +588,10 @@ visual placement through pointer hits, Home/End, arrows, and typing undo/redo.
 Pointer selection uses the latest matching caret map;
 late layout may resolve a released drag, but edits/navigation invalidate its
 old pending hit. Deactivation ends a pointer drag. Modified navigation in the
-font filter remains in that filter and cannot affect canvas text. Styles still
-apply to the whole text layer. Text entry uses key events and clipboard text;
+font filter remains in that filter and cannot affect canvas text. Styles
+apply to selected text, new typing at the caret, or all text when a layer is selected
+without a caret. Spacing and layout stay layer-wide. Text entry uses key events
+and clipboard text;
 native IME composition is not supported. Native Edit menu actions and Undo/Redo
 step through typing first, then fall through to image history. There is no Apply or Discard: Escape,
 Cmd/Ctrl-Enter, a click outside the text, or changing tools, layers, tabs, or
@@ -607,8 +609,10 @@ font list scrolls independently of Tool Options and shows an English Aa sample
 in each font. Opening the font box focuses a case-insensitive name filter;
 typing narrows the list, arrows browse it, Return chooses, and Escape closes
 it. Query typing, clipboard actions, and undo/redo stay in the filter and do not
-edit the canvas text. The layer stores the source, one font with bold/italic flags, a
-pixel size, letter and line spacing, and a color, plus the raster used for
+edit the canvas text. The layer stores source, default font/face/size/color, and optional
+canonical UTF-8 style runs at grapheme boundaries. Runs cover the entire source,
+merge adjacent equal styles, and carry font, bold/italic, size, and RGBA color.
+Letter/line spacing and box layout remain layer-wide. The cached raster is used for
 display and export. Opening a draft preserves those
 pixels until its source or style changes. Preview jobs coalesce changes and
 preserve layer opacity and stack order. A missing named font shows a substitution
@@ -1480,7 +1484,18 @@ app backups, and project build caches can be removed when cleanup is requested.
   overflowing source, and expose an overflow notice. Draft history, defaults,
   previews, matches, and version 9 projects carry it. Caret maps retain visual
   wrap boundaries; glyph rasterization only visits visible fixed-box lines.
-  Mixed spans remain a recorded follow-up, not a partially persisted rich-text API.
+  `src/text/runs.rs` owns styled range formatting and insertion/deletion. Draft history,
+  clipboard metadata, recovery (including failure sidecars), and version 11 projects
+  preserve these runs. Older project versions load with one default style; writing
+  uniform legacy content still uses the oldest applicable format. Invalid/gapped/
+  overlapping or non-grapheme ranges are rejected. Character controls show Mixed
+  for differing properties and name their target: All text, Selected text, or New
+  typing. Caret movement resets the insertion style; following text owns a clicked
+  boundary, preceding text owns upstream affinity. Numeric size cancellation restores
+  the full field-start style state. Plain paste inherits the insertion style; verified
+  Lime clipboard metadata retains formatting. Grayscale conversion constrains every
+  run. Rendering and Text Along Path share rich shaping; caret/selection/hit testing
+  use each visual line's height. History budgets include owned run metadata.
 - Feathered simple selections retain source geometry in `Mask`. Move/resize
   previews use the source shape, then rebuild feathering in the change worker.
   A clipped source curve retains its original box. Combination/morphology/image
@@ -1539,9 +1554,9 @@ app backups, and project build caches can be removed when cleanup is requested.
 
 ## Scope boundaries
 
-Text styling applies to the whole layer. Mixed styles need explicit UTF-8 span
-editing, style-at-caret, clipboard, undo, and versioned project semantics before
-adding span attributes. Layer masks have no direct brush target, and retained
+Text supports mixed font, size, color, bold, and italic within a layer. Paragraph
+styles, per-range spacing, and external rich-text/HTML clipboard import are outside
+its scope. Layer masks have no direct brush target, and retained
 effects are not a general effect stack.
 
 PDF imports do not persist provenance or provide reimport. Any future reimport

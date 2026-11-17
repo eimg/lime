@@ -136,6 +136,9 @@ impl Workspace {
             return div();
         }
         let mut body = div().flex().flex_col().gap_2().p(px(5.));
+        if self.preferences.tool == T::Text {
+            body = body.child(compact_label(self.text_format_target()));
+        }
         let fields: &[(&str, NumericField)] = match self.preferences.tool {
             T::Pencil => &[("Size", N::BrushSize), ("Opacity", N::BrushOpacity)],
             T::Brush | T::Eraser | T::Blur | T::Sharpen | T::CloneStamp => &[
@@ -356,11 +359,28 @@ impl Workspace {
                                 .cursor_pointer()
                                 .hover(|button| button.bg(rgb(HOVER)))
                                 .tooltip(tooltip(format!(
-                                    "Text color #{color:06X} — click to change"
+                                    "{} — click to change",
+                                    if self.text_color_mixed() {
+                                        "Mixed text colors".to_owned()
+                                    } else {
+                                        format!("Text color #{color:06X}")
+                                    }
                                 )))
-                                .child(div().size_full().rounded_sm().bg(rgb(color))),
+                                .child(div().size_full().rounded_sm().bg(rgb(color)).when(
+                                    self.text_color_mixed(),
+                                    |swatch| {
+                                        swatch
+                                            .bg(rgb(CANVAS))
+                                            .text_size(px(9.))
+                                            .text_center()
+                                            .whitespace_nowrap()
+                                            .overflow_hidden()
+                                            .child("Mixed")
+                                    },
+                                )),
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
+                            this.prepare_text_format(window, cx);
                             let swatch = if this.text_draft.is_some() {
                                 super::text_ui::TEXT_SWATCH
                             } else {

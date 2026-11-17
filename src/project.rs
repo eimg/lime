@@ -17,12 +17,12 @@ pub const EXTENSION: &str = "lime";
 pub const LEGACY_EXTENSION: &str = "imageedit";
 // Preserve the on-disk signature so existing projects remain readable.
 pub const MAGIC: &[u8; 8] = b"IMGEDIT\0";
-const VERSION: u32 = 10;
+const VERSION: u32 = 11;
 
 fn default_true() -> bool {
     true
 }
-// Covers the maximum legal path and text metadata while keeping reads bounded.
+// Bound serialized metadata (including style runs) before reading pixel payloads.
 const MAX_MANIFEST_BYTES: u32 = 8 * 1024 * 1024;
 const MAX_PAYLOAD_BYTES: u64 = 768 * 1024 * 1024;
 
@@ -125,6 +125,8 @@ struct EffectEntry {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct TextEntry {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    runs: Vec<crate::text::StyleRun>,
     source: String,
     family: String,
     // Existing version 6 projects predate the face controls.
@@ -216,7 +218,7 @@ fn read_inner(
     let manifest: Manifest =
         serde_json::from_slice(&manifest).context("Invalid project manifest")?;
     ensure!(
-        matches!(manifest.version, 6 | 7 | 8 | 9 | VERSION),
+        matches!(manifest.version, 6 | 7 | 8 | 9 | 10 | VERSION),
         "Unsupported Lime project version {}",
         manifest.version
     );
@@ -311,6 +313,7 @@ fn read_inner(
             locks: entry.locks,
             name: entry.name,
             text: entry.text.map(|text| crate::text::TextStyle {
+                runs: text.runs,
                 layout: text.layout,
                 source: text.source,
                 family: text.family,
@@ -432,8 +435,16 @@ fn write_impl(
 ) -> Result<()> {
     let (width, height) = content.size();
     let manifest = Manifest {
-        version: if !content.layer_links().is_empty() || !content.shadow_attachments().is_empty() {
+        version: if content.layers().iter().any(|layer| {
+            layer
+                .text
+                .as_ref()
+                .is_some_and(|text| !text.runs.is_empty())
+        }) || recovery.as_ref().is_some_and(|entry| entry.text.is_some())
+        {
             VERSION
+        } else if !content.layer_links().is_empty() || !content.shadow_attachments().is_empty() {
+            10
         } else if recovery.is_some()
             || content.layers().iter().any(|layer| {
                 layer.effect.is_some()
@@ -482,6 +493,7 @@ fn write_impl(
                     coverage: effect.coverage.is_some(),
                 }),
                 text: layer.text.as_ref().map(|text| TextEntry {
+                    runs: text.runs.clone(),
                     source: text.source.clone(),
                     family: text.family.clone(),
                     bold: text.face.bold,
@@ -674,6 +686,11 @@ fn check_limits(manifest: &Manifest) -> Result<()> {
             .context("The project layers are too large")?;
         ensure!(ids.insert(layer.id), "Layer ID {} is repeated", layer.id);
         if let Some(text) = &layer.text {
+            ensure!(
+                (manifest.version >= 11 || text.runs.is_empty())
+                    && crate::text::runs::allowed(&text.source, &text.runs),
+                "Invalid styled text ranges"
+            );
             ensure!(
                 crate::text::fields_allowed(
                     &text.source,
@@ -872,6 +889,42 @@ mod tests {
     }
 
     #[test]
+    fn styled_text_round_trip_and_invalid_ranges_are_rejected() {
+        let mut spec = crate::text::runs::tests::sample("Hello ကောင်း");
+        spec.format_range(6..spec.source.len(), |style| {
+            style.face.bold = true;
+            style.size = 36.;
+            style.color = [150, 20, 70, 200];
+        });
+        let rendered = crate::text::render_spec(&spec).unwrap();
+        let mut layers = two_layers().layers().to_vec();
+        layers[0].pixels = rendered.image;
+        layers[0].text = Some(rendered.style);
+        let content = DocumentContent::from_layers(100, 100, layers).unwrap();
+        let bytes = write_bytes(&content).unwrap();
+        assert_eq!(manifest_json(&bytes)["version"], json!(11));
+        let loaded = read_bytes(&bytes).unwrap();
+        assert_eq!(loaded.layers()[0].text, content.layers()[0].text);
+        assert_eq!(loaded.composite(), content.composite());
+        let mut gray = loaded.clone();
+        gray.set_color_mode(crate::transform::ColorMode::Grayscale);
+        let gray_text = gray.layers()[0].text.as_ref().unwrap();
+        assert!(
+            gray_text
+                .runs
+                .iter()
+                .all(|run| run.style.color[0] == run.style.color[1]
+                    && run.style.color[1] == run.style.color[2])
+        );
+        let mut manifest = manifest_json(&bytes);
+        manifest["version"] = json!(10);
+        assert!(read_bytes(&with_manifest(&bytes, &manifest)).is_err());
+        manifest["version"] = json!(11);
+        manifest["layers"][0]["text"]["runs"][1]["end"] = json!(7);
+        assert!(read_bytes(&with_manifest(&bytes, &manifest)).is_err());
+    }
+
+    #[test]
     fn linked_layers_round_trip_and_invalid_membership_is_rejected() {
         let mut content = two_layers();
         content.link_layers(LayerId(7), LayerId(3));
@@ -1011,6 +1064,7 @@ mod tests {
                 DocumentContent::single_layer("Text".into(), image::RgbaImage::new(80, 50));
             let mut layers = content.layers().to_vec();
             let rendered = crate::text::render_spec(&crate::text::TextSpec {
+                runs: Vec::new(),
                 source: "Wrapped text survives".into(),
                 family: "sans-serif".into(),
                 face: Default::default(),
@@ -1245,6 +1299,7 @@ mod tests {
         }
         let mut layers = content.layers().to_vec();
         layers[0].text = Some(crate::text::TextStyle {
+            runs: Vec::new(),
             layout: Default::default(),
             source: "上".repeat(crate::text::MAX_TEXT_CHARS),
             family: "sans-serif".into(),
@@ -1270,7 +1325,7 @@ mod tests {
         let manifest = manifest_json(&valid);
         type Edit<'a> = (&'a str, &'a dyn Fn(&mut serde_json::Value));
         let edits: [Edit; 27] = [
-            ("unknown version", &|m| m["version"] = json!(11)),
+            ("unknown version", &|m| m["version"] = json!(VERSION + 1)),
             ("previous version", &|m| m["version"] = json!(5)),
             ("long layer name", &|m| {
                 m["layers"][0]["name"] = json!("x".repeat(65))
@@ -1506,6 +1561,7 @@ mod tests {
 
         for (bold, italic) in [(true, false), (false, true), (true, true)] {
             let rendered = crate::text::render_spec(&crate::text::TextSpec {
+                runs: Vec::new(),
                 layout: Default::default(),
                 source: "Aa".into(),
                 family: "sans-serif".into(),

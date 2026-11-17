@@ -39,7 +39,7 @@ Windows downloads are unsigned. The macOS app is Developer ID signed and notariz
 - **Painting** — pencil, brush, eraser, clone stamp, gradients, and bucket fill.
   Per-tool settings and recent colors survive app restarts.
 - **Text and paths** — editable text with sizes up to 4,096 pixels, font controls,
-  wrapping, and editable vector paths.
+  wrapping, mixed fonts and colors within a layer, and editable vector paths.
   Select letter shapes with Alpha to Selection, or preview and adjust text along
   a path while keeping the original text.
 - **Color and effects** — levels, curves, blur, sharpen, drop shadows, and editable layer effects.

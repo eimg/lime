@@ -724,6 +724,9 @@ impl DocumentContent {
                 layer.pixels = Arc::new(crate::transform::grayscale((*layer.pixels).clone()));
                 if let Some(style) = layer.text.as_mut() {
                     style.color = mode.constrain(style.color);
+                    for run in &mut style.runs {
+                        run.style.color = mode.constrain(Rgba(run.style.color)).0;
+                    }
                 }
             }
             Dirty::Canvas
@@ -3063,6 +3066,7 @@ mod tests {
         }));
         assert!(!with_path.is_plain_raster());
         content.layers[0].text = Some(crate::text::TextStyle {
+            runs: Vec::new(),
             layout: Default::default(),
             source: "Cached text".into(),
             family: "Missing Family".into(),
@@ -3080,6 +3084,7 @@ mod tests {
             style: layer.text.clone().unwrap(),
         };
         assert!(cached.matches(&crate::text::TextSpec {
+            runs: Vec::new(),
             layout: Default::default(),
             source: "Cached text".into(),
             family: "Missing Family".into(),

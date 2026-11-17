@@ -177,7 +177,15 @@ impl History {
                     .iter()
                     .filter_map(|layer| layer.text.as_ref())
                     .map(|text| {
-                        (text.source.len() + text.family.len() + text.resolved_family.len()) as u64
+                        (text.source.len()
+                            + text.family.len()
+                            + text.resolved_family.len()
+                            + std::mem::size_of_val(text.runs.as_slice())
+                            + text
+                                .runs
+                                .iter()
+                                .map(|run| run.style.family.len())
+                                .sum::<usize>()) as u64
                     })
                     .sum();
                 let retained_metadata = content

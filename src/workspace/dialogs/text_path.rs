@@ -108,6 +108,7 @@ impl TextPathDraft {
             },
             content: content.clone(),
             spec: TextSpec {
+                runs: style.runs.clone(),
                 source: style.source.clone(),
                 family: style.family.clone(),
                 face: style.face,
@@ -367,7 +368,7 @@ impl Workspace {
         let Some(draft) = TextPathDraft::capture(tab) else {
             return;
         };
-        self.show_form(FormKind::TextPath(draft), window, cx);
+        self.show_form(FormKind::TextPath(Box::new(draft)), window, cx);
         self.pump_text_path_preview(window, cx);
     }
 

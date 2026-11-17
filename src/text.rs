@@ -5,6 +5,8 @@ use image::{Rgba, RgbaImage};
 use crate::document::{MAX_IMAGE_BYTES, MAX_NEW_EDGE};
 
 pub mod path;
+pub mod runs;
+pub use runs::{CharacterStyle, StyleRun};
 
 pub const MAX_TEXT_CHARS: usize = 4_000;
 pub const MAX_FAMILY_CHARS: usize = 128;
@@ -85,6 +87,7 @@ impl TextLayout {
 /// Everything that decides how a text layer rasterizes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextSpec {
+    pub runs: Vec<StyleRun>,
     pub source: String,
     pub family: String,
     pub face: FontFace,
@@ -96,6 +99,7 @@ pub struct TextSpec {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
+    pub runs: Vec<StyleRun>,
     pub source: String,
     pub family: String,
     pub face: FontFace,
@@ -109,6 +113,19 @@ pub struct TextStyle {
 }
 
 impl TextStyle {
+    pub fn spec(&self) -> TextSpec {
+        TextSpec {
+            runs: self.runs.clone(),
+            source: self.source.clone(),
+            family: self.family.clone(),
+            face: self.face,
+            size: self.size,
+            color: self.color,
+            spacing: self.spacing,
+            layout: self.layout,
+        }
+    }
+
     pub fn substituted(&self) -> bool {
         !is_generic(&self.family) && !self.family.eq_ignore_ascii_case(&self.resolved_family)
     }
@@ -136,7 +153,8 @@ pub struct RenderedText {
 
 impl RenderedText {
     pub fn matches(&self, spec: &TextSpec) -> bool {
-        self.style.source == spec.source
+        self.style.runs == spec.runs
+            && self.style.source == spec.source
             && self.style.family == spec.family
             && self.style.face == spec.face
             && self.style.size == spec.size
@@ -211,6 +229,7 @@ pub fn render(
     color: Rgba<u8>,
 ) -> Result<RenderedText, TextError> {
     render_spec(&TextSpec {
+        runs: Vec::new(),
         layout: Default::default(),
         source: source.to_owned(),
         family: family.to_owned(),
@@ -224,7 +243,7 @@ pub fn render(
 pub fn render_spec(spec: &TextSpec) -> Result<RenderedText, TextError> {
     let (source, pixel_size, color, spacing) =
         (spec.source.as_str(), spec.size, spec.color, spec.spacing);
-    if !spacing.allowed() || !spec.layout.allowed() {
+    if !runs::allowed(source, &spec.runs) || !spacing.allowed() || !spec.layout.allowed() {
         return Err(TextError::Spacing);
     }
     if !pixel_size.is_finite() || !(MIN_PIXEL_SIZE..=MAX_PIXEL_SIZE).contains(&pixel_size) {
@@ -256,17 +275,10 @@ pub fn render_spec(spec: &TextSpec) -> Result<RenderedText, TextError> {
                 (0, 0),
             );
             result.style.layout = spec.layout;
+            result.style.runs = spec.runs.clone();
             return Ok(result);
         }
-        let mut buffer = layout(
-            font_system,
-            source,
-            &family,
-            pixel_size,
-            spacing,
-            spec.face,
-            spec.layout,
-        );
+        let mut buffer = layout(font_system, spec);
 
         let mut line_right = 0i32;
         let mut line_bottom = 0i32;
@@ -306,22 +318,28 @@ pub fn render_spec(spec: &TextSpec) -> Result<RenderedText, TextError> {
         let mut bottom = line_bottom;
         let mut too_big = false;
         let ink = cosmic_text::Color::rgba(color.0[0], color.0[1], color.0[2], 255);
-        buffer.draw(font_system, cache, ink, |x, y, w, h, pixel| {
-            if too_big || pixel.a() == 0 || w == 0 || h == 0 {
-                return;
-            }
-            let far_x = x.saturating_add(i32::try_from(w).unwrap_or(i32::MAX) - 1);
-            let far_y = y.saturating_add(i32::try_from(h).unwrap_or(i32::MAX) - 1);
-            left = left.min(x.min(0));
-            top = top.min(y.min(0));
-            right = right.max(far_x);
-            bottom = bottom.max(far_y);
-            if right.saturating_sub(left) >= MAX_NEW_EDGE as i32
-                || bottom.saturating_sub(top) >= MAX_NEW_EDGE as i32
-            {
-                too_big = true;
-            }
-        });
+        draw(
+            &mut buffer,
+            font_system,
+            cache,
+            ink,
+            |x, y, w, h, pixel, _opacity| {
+                if too_big || pixel.a() == 0 || w == 0 || h == 0 {
+                    return;
+                }
+                let far_x = x.saturating_add(i32::try_from(w).unwrap_or(i32::MAX) - 1);
+                let far_y = y.saturating_add(i32::try_from(h).unwrap_or(i32::MAX) - 1);
+                left = left.min(x.min(0));
+                top = top.min(y.min(0));
+                right = right.max(far_x);
+                bottom = bottom.max(far_y);
+                if right.saturating_sub(left) >= MAX_NEW_EDGE as i32
+                    || bottom.saturating_sub(top) >= MAX_NEW_EDGE as i32
+                {
+                    too_big = true;
+                }
+            },
+        );
         if too_big && spec.layout.width.is_none() {
             return Err(TextError::TooLarge);
         }
@@ -339,31 +357,37 @@ pub fn render_spec(spec: &TextSpec) -> Result<RenderedText, TextError> {
             return Err(TextError::TooLarge);
         }
         let mut image = RgbaImage::new(width, height);
-        buffer.draw(font_system, cache, ink, |x, y, w, h, pixel| {
-            let coverage = pixel.a();
-            if coverage == 0 || w == 0 || h == 0 {
-                return;
-            }
-            let rgb = [pixel.r(), pixel.g(), pixel.b()];
-            let columns = i32::try_from(w).unwrap_or(i32::MAX);
-            let rows = i32::try_from(h).unwrap_or(i32::MAX);
-            for row in 0..rows {
-                for column in 0..columns {
-                    let px = x.saturating_add(column).saturating_sub(left);
-                    let py = y.saturating_add(row).saturating_sub(top);
-                    if px < 0 || py < 0 {
-                        continue;
-                    }
-                    let (Ok(px), Ok(py)) = (u32::try_from(px), u32::try_from(py)) else {
-                        continue;
-                    };
-                    if px >= width || py >= height {
-                        continue;
-                    }
-                    cover(image.get_pixel_mut(px, py), rgb, coverage, color.0[3]);
+        draw(
+            &mut buffer,
+            font_system,
+            cache,
+            ink,
+            |x, y, w, h, pixel, opacity| {
+                let coverage = pixel.a();
+                if coverage == 0 || w == 0 || h == 0 {
+                    return;
                 }
-            }
-        });
+                let rgb = [pixel.r(), pixel.g(), pixel.b()];
+                let columns = i32::try_from(w).unwrap_or(i32::MAX);
+                let rows = i32::try_from(h).unwrap_or(i32::MAX);
+                for row in 0..rows {
+                    for column in 0..columns {
+                        let px = x.saturating_add(column).saturating_sub(left);
+                        let py = y.saturating_add(row).saturating_sub(top);
+                        if px < 0 || py < 0 {
+                            continue;
+                        }
+                        let (Ok(px), Ok(py)) = (u32::try_from(px), u32::try_from(py)) else {
+                            continue;
+                        };
+                        if px >= width || py >= height {
+                            continue;
+                        }
+                        cover(image.get_pixel_mut(px, py), rgb, coverage, opacity);
+                    }
+                }
+            },
+        );
         let (resolved, _) = resolve_family(font_system, &family, used_font);
         if resolved.chars().count() > MAX_FAMILY_CHARS {
             return Err(TextError::Family);
@@ -380,43 +404,84 @@ pub fn render_spec(spec: &TextSpec) -> Result<RenderedText, TextError> {
             (-left, -top),
         );
         result.style.layout = spec.layout;
+        result.style.runs = spec.runs.clone();
         Ok(result)
     })
 }
 
-fn layout(
-    font_system: &mut cosmic_text::FontSystem,
-    source: &str,
-    family: &str,
-    pixel_size: f32,
-    spacing: Spacing,
-    face: FontFace,
-    text_layout: TextLayout,
-) -> cosmic_text::Buffer {
-    let metrics = cosmic_text::Metrics::new(pixel_size, line_height(pixel_size, spacing));
+// Swash's legacy draw callback ignores the requested alpha. Keep it separate
+// from glyph coverage (including color emoji) and apply it exactly once.
+fn draw(
+    buffer: &mut cosmic_text::Buffer,
+    fonts: &mut cosmic_text::FontSystem,
+    cache: &mut cosmic_text::SwashCache,
+    fallback: cosmic_text::Color,
+    mut paint: impl FnMut(i32, i32, u32, u32, cosmic_text::Color, u8),
+) {
+    buffer.shape_until_scroll(fonts, false);
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            let physical = glyph.physical((0., run.line_y), 1.);
+            let color = glyph.color_opt.unwrap_or(fallback);
+            cache.with_pixels(fonts, physical.cache_key, color, |x, y, pixel| {
+                paint(physical.x + x, physical.y + y, 1, 1, pixel, color.a());
+            });
+        }
+    }
+}
+
+fn layout(font_system: &mut cosmic_text::FontSystem, spec: &TextSpec) -> cosmic_text::Buffer {
+    let metrics = cosmic_text::Metrics::new(spec.size, line_height(spec.size, spec.spacing));
     let mut buffer = cosmic_text::Buffer::new(font_system, metrics);
-    buffer.set_wrap(if text_layout.width.is_some() {
+    buffer.set_wrap(if spec.layout.width.is_some() {
         cosmic_text::Wrap::WordOrGlyph
     } else {
         cosmic_text::Wrap::None
     });
-    buffer.set_size(text_layout.width.map(|value| value as f32), None);
-    let attrs = cosmic_text::Attrs::new()
-        .family(family_attr(family))
-        .weight(if face.bold {
-            cosmic_text::Weight::BOLD
-        } else {
-            cosmic_text::Weight::NORMAL
-        })
-        .style(if face.italic {
-            cosmic_text::Style::Italic
-        } else {
-            cosmic_text::Style::Normal
-        })
-        .letter_spacing(spacing.letter / pixel_size);
-    buffer.set_text(source, &attrs, cosmic_text::Shaping::Advanced, None);
+    buffer.set_size(spec.layout.width.map(|value| value as f32), None);
+    let base = spec.base_style();
+    let attrs = |style: &'_ CharacterStyle| {
+        cosmic_text::Attrs::new()
+            .weight(if style.face.bold {
+                cosmic_text::Weight::BOLD
+            } else {
+                cosmic_text::Weight::NORMAL
+            })
+            .style(if style.face.italic {
+                cosmic_text::Style::Italic
+            } else {
+                cosmic_text::Style::Normal
+            })
+            .metrics(cosmic_text::Metrics::new(
+                style.size,
+                line_height(style.size, spec.spacing),
+            ))
+            .letter_spacing(spec.spacing.letter / style.size)
+            .color(cosmic_text::Color::rgba(
+                style.color[0],
+                style.color[1],
+                style.color[2],
+                style.color[3],
+            ))
+    };
+    let default = attrs(&base).family(family_attr(&base.family));
+    if spec.runs.is_empty() {
+        buffer.set_text(&spec.source, &default, cosmic_text::Shaping::Advanced, None);
+    } else {
+        buffer.set_rich_text(
+            spec.runs.iter().map(|run| {
+                (
+                    &spec.source[run.start..run.end],
+                    attrs(&run.style).family(family_attr(&run.style.family)),
+                )
+            }),
+            &default,
+            cosmic_text::Shaping::Advanced,
+            None,
+        );
+    }
     for line in &mut buffer.lines {
-        line.set_align(Some(match text_layout.align {
+        line.set_align(Some(match spec.layout.align {
             TextAlign::Left => cosmic_text::Align::Left,
             TextAlign::Center => cosmic_text::Align::Center,
             TextAlign::Right => cosmic_text::Align::Right,
@@ -441,6 +506,7 @@ pub enum CaretAffinity {
 /// A caret position in layout coordinates, where the text anchor is the origin.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CaretStop {
+    pub height: f32,
     pub byte: usize,
     pub line: usize,
     pub x: f32,
@@ -466,7 +532,7 @@ impl CaretMap {
             let width = if start.line == end.line {
                 (end.x - start.x).abs()
             } else {
-                self.line_height * 0.35
+                start.height * 0.35
             };
             if width > 0. {
                 rectangles.push((
@@ -477,7 +543,7 @@ impl CaretMap {
                     },
                     start.top,
                     width,
-                    self.line_height,
+                    start.height,
                 ));
             }
         }
@@ -486,6 +552,7 @@ impl CaretMap {
         for (x, top, width, height) in rectangles {
             if let Some(last) = merged.last_mut()
                 && last.1 == top
+                && last.3 == height
                 && x <= last.0 + last.2 + 0.1
             {
                 last.2 = (x + width).max(last.0 + last.2) - last.0;
@@ -498,7 +565,8 @@ impl CaretMap {
 
     pub fn matches(&self, spec: &TextSpec) -> bool {
         self.spec.as_ref().is_some_and(|own| {
-            own.source == spec.source
+            own.runs == spec.runs
+                && own.source == spec.source
                 && own.family == spec.family
                 && own.face == spec.face
                 && own.size == spec.size
@@ -536,12 +604,15 @@ impl CaretMap {
     }
 
     pub fn hit_position(&self, x: f32, y: f32) -> Option<(usize, CaretAffinity)> {
-        let last = self.stops.last()?;
-        let line = if self.line_height > 0. && y.is_finite() {
-            ((y / self.line_height).floor().max(0.) as usize).min(last.line)
-        } else {
-            0
-        };
+        let line = self
+            .stops
+            .iter()
+            .min_by(|a, b| {
+                let distance =
+                    |stop: &CaretStop| (stop.top - y).max(0.).max(y - stop.top - stop.height);
+                distance(a).total_cmp(&distance(b))
+            })?
+            .line;
         self.stops
             .iter()
             .filter(|stop| stop.line == line)
@@ -589,22 +660,14 @@ pub fn caret_map(spec: &TextSpec) -> Result<CaretMap, TextError> {
     if !spec.size.is_finite() || !(MIN_PIXEL_SIZE..=MAX_PIXEL_SIZE).contains(&spec.size) {
         return Err(TextError::Size);
     }
-    if !spec.spacing.allowed() || !spec.layout.allowed() {
+    if !runs::allowed(&spec.source, &spec.runs) || !spec.spacing.allowed() || !spec.layout.allowed()
+    {
         return Err(TextError::Spacing);
     }
-    let family = normalize_family(&spec.family);
     let line_height = line_height(spec.size, spec.spacing);
     let mut stops = Vec::with_capacity(spec.source.len() + 1);
     with_fonts(|font_system, _| {
-        let buffer = layout(
-            font_system,
-            &spec.source,
-            &family,
-            spec.size,
-            spec.spacing,
-            spec.face,
-            spec.layout,
-        );
+        let buffer = layout(font_system, spec);
         let mut start = 0;
         for (line, text) in spec.source.split('\n').enumerate() {
             for (index, _) in
@@ -627,6 +690,7 @@ pub fn caret_map(spec: &TextSpec) -> Result<CaretMap, TextError> {
                             };
                         }
                         stops.push(CaretStop {
+                            height: run.line_height,
                             byte: start + index,
                             line: visual,
                             x: if x.is_finite() { x } else { 0. },
@@ -641,6 +705,7 @@ pub fn caret_map(spec: &TextSpec) -> Result<CaretMap, TextError> {
                 }
                 if !positioned {
                     stops.push(CaretStop {
+                        height: line_height,
                         byte: start + index,
                         line,
                         x: 0.,
@@ -710,6 +775,7 @@ fn rendered(
     RenderedText {
         image: Arc::new(image),
         style: TextStyle {
+            runs: Vec::new(),
             layout: Default::default(),
             source: source.to_owned(),
             family,
@@ -724,6 +790,31 @@ fn rendered(
 }
 
 pub(crate) fn substitution(style: &TextStyle) -> Option<String> {
+    if !style.runs.is_empty() {
+        return with_fonts(|fonts, _| {
+            let mut missing = Vec::new();
+            for run in &style.runs {
+                let family = &run.style.family;
+                if !is_generic(family)
+                    && !missing.contains(family)
+                    && canonical_family(fonts, family).is_none()
+                {
+                    missing.push(family.clone());
+                }
+            }
+            (!missing.is_empty()).then(|| {
+                format!(
+                    "Using sans-serif for missing fonts: {}.",
+                    missing
+                        .iter()
+                        .map(|name| name.as_str())
+                        .take(4)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+        });
+    }
     if is_generic(&style.family) {
         return None;
     }
@@ -756,11 +847,11 @@ fn with_fonts<T>(
 }
 
 fn family_attr(family: &str) -> cosmic_text::fontdb::Family<'_> {
-    match family {
-        "sans-serif" => cosmic_text::fontdb::Family::SansSerif,
+    match family.trim().to_ascii_lowercase().as_str() {
+        "sans-serif" | "sans" => cosmic_text::fontdb::Family::SansSerif,
         "serif" => cosmic_text::fontdb::Family::Serif,
-        "monospace" => cosmic_text::fontdb::Family::Monospace,
-        _ => cosmic_text::fontdb::Family::Name(family),
+        "monospace" | "mono" => cosmic_text::fontdb::Family::Monospace,
+        _ => cosmic_text::fontdb::Family::Name(family.trim()),
     }
 }
 
@@ -856,6 +947,7 @@ mod tests {
 
     fn spec(source: &str, spacing: Spacing) -> TextSpec {
         TextSpec {
+            runs: Vec::new(),
             layout: Default::default(),
             source: source.into(),
             family: "sans-serif".into(),

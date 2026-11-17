@@ -194,7 +194,13 @@ fn corrupt_recovery_files_survive_clean_exit_and_canceled_snapshots_do_not_reapp
 fn recovered_failed_text_source_and_name_survive_repeated_crashes() {
     let root = tempfile::tempdir().unwrap();
     let content = scene();
-    let text = serde_json::json!({"source":"Preserve this draft even when its renderer fails"});
+    let source = "Preserve this draft even when its renderer fails";
+    let mut styled = crate::text::runs::tests::sample(source);
+    styled.format_range(0..8, |style| {
+        style.face.italic = true;
+        style.color = [255, 0, 0, 255];
+    });
+    let text = serde_json::json!({"source":source, "runs":styled.runs});
     let (first, _, _) = crate::recovery::Store::open(root.path()).unwrap();
     first
         .snapshot(5, "Original", &content, Some(&text), &AtomicBool::new(true))

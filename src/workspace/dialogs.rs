@@ -64,7 +64,7 @@ pub(super) enum FormKind {
     },
     Export(ExportDraft),
     Stroke(stroke::StrokeDraft),
-    TextPath(text_path::TextPathDraft),
+    TextPath(Box<text_path::TextPathDraft>),
     NewLayer {
         name: Field,
         fill: LayerFill,

@@ -33,8 +33,7 @@ impl Default for Options {
 }
 
 pub struct Prepared {
-    paths: Vec<Path>,
-    color: image::Rgba<u8>,
+    paths: Vec<(Path, [u8; 4])>,
     pub offset: (i32, i32),
     pub size: (u32, u32),
     pub overflow: bool,
@@ -127,19 +126,22 @@ pub fn prepare(
             && options.baseline.abs() <= 1_000_000.,
         "Offsets must be between −1000000 and 1000000 pixels."
     );
-    ensure!(spec.color[3] != 0, "The text is fully transparent.");
+    ensure!(
+        super::runs::allowed(&spec.source, &spec.runs),
+        "Invalid styled text ranges."
+    );
+    ensure!(
+        spec.styles_in(0..spec.source.len())
+            .iter()
+            .any(|style| style.color[3] != 0),
+        "The text is fully transparent."
+    );
     let guide = Guide::new(path, options.reverse)?;
     super::with_fonts(|fonts, cache| {
         // Fixed boxes and their clipping do not constrain a guide's single line.
-        let buffer = super::layout(
-            fonts,
-            &spec.source,
-            &spec.family,
-            spec.size,
-            spec.spacing,
-            spec.face,
-            TextLayout::default(),
-        );
+        let mut path_spec = spec.clone();
+        path_spec.layout = TextLayout::default();
+        let buffer = super::layout(fonts, &path_spec);
         let run = buffer
             .layout_runs()
             .next()
@@ -242,14 +244,14 @@ pub fn prepare(
                 }
             }
             if let Some(path) = builder.finish() {
-                paths.push(path);
+                paths.push((path, spec.style_at(glyph.start).color));
             }
         }
         ensure!(
             !paths.is_empty(),
             "No letters fit on the guide. Reduce the font size, adjust the offset, or use a longer path."
         );
-        let bounds = paths.iter().map(Path::bounds).fold(
+        let bounds = paths.iter().map(|(path, _)| path.bounds()).fold(
             [
                 f64::INFINITY,
                 f64::INFINITY,
@@ -283,7 +285,6 @@ pub fn prepare(
         );
         Ok(Prepared {
             paths,
-            color: spec.color,
             offset: (left as i32, top as i32),
             size: (width as u32, height as u32),
             overflow,
@@ -295,8 +296,8 @@ impl Prepared {
     fn raster(&self, size: (u32, u32), transform: Transform) -> Result<RgbaImage> {
         let mut pixmap = Pixmap::new(size.0, size.1).context("The text bitmap is too large.")?;
         let mut paint = Paint::default();
-        paint.set_color_rgba8(self.color[0], self.color[1], self.color[2], self.color[3]);
-        for path in &self.paths {
+        for (path, color) in &self.paths {
+            paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
             pixmap.fill_path(path, &paint, FillRule::Winding, transform, None);
         }
         let mut data = pixmap.take();
