@@ -62,7 +62,7 @@
 <ol>
 <li><strong>Select</strong> menu သို့မဟုတ် Toolbox မှ <strong>Rectangle Select</strong>၊ <strong>Oval Select</strong>၊ <strong>Free Select</strong> သို့မဟုတ် <strong>Magic Wand</strong> ကို ရွေးပါ။</li>
 <li>Rectangle/Oval ကို ဆွဲပါ၊ Free outline ကို ပိတ်ပါ သို့မဟုတ် Wand ဖြင့် ဆက်နေသော နေရာကို နှိပ်ပါ။</li>
-<li>နောက်ထပ် Selection လုပ်စဉ် <strong>Shift</strong> ကို ဖိထားပြီး ထပ်ပေါင်းပါ။ <strong>Control</strong> ဖြင့် နုတ်ပါ။ <strong>Shift+Control</strong> ဖြင့် နှစ်ခုထပ်နေသော နေရာကိုသာ ယူပါ။ macOS တွင်လည်း ဤ Gesture များအတွက် Control ကို သုံးသည်။</li>
+<li>နောက်ထပ် Selection လုပ်စဉ် <strong>Shift</strong> ကို ဖိထားပြီး ထပ်ပေါင်းပါ။ <strong>Cmd/Ctrl</strong> ဖြင့် နုတ်ပါ။ <strong>Shift+Cmd/Ctrl</strong> ဖြင့် နှစ်ခုထပ်နေသော နေရာကိုသာ ယူပါ။ macOS တွင် Command၊ Windows/Linux တွင် Ctrl ကို သုံးပါ။</li>
 <li>Active layer ပေါ်တွင် ပုံဆွဲပါ သို့မဟုတ် Fill လုပ်ပါ။ အခြားနေရာပြင်ရန် ကန့်သတ်မှုဖယ်လိုလျှင် <strong>Select → Select None</strong> ကို ရွေးပါ။</li>
 </ol>
 <p>စက်ဝိုင်းအတွက် Oval Select တွင် <strong>1:1</strong> ရွေးပါ။ Rectangle နှင့် Oval က Aspect ratio တစ်ခုတည်းကို မျှဝေသုံးသည်။ Crop က သီးခြား မှတ်ထားသည်။ Fixed ratio ရွေးလျှင် လက်ရှိ Editable shape ကိုလည်း Center မပြောင်းဘဲ ပြန်ညှိပေးသည်။</p>
@@ -70,6 +70,7 @@
 <p><strong>Antialias edges</strong> က Curve နှင့် စောင်းနေသော အနားကို ပါးလွှာသော Pixel fringe အတွင်း ချောမွေ့စေသည်။ <strong>Feather new selections</strong> က ပိုကျယ်သော Radius အတွင်း Coverage ကို ဖြန့်ပြီး Soft edges ဖန်တီးသည်။ နှစ်ခုက မတူသော Settings ဖြစ်ပြီး အတူသုံးနိုင်သည်။</p>
 <p>ရှိပြီးသား Selection ကို <strong>Select → Feather…</strong> ဖြင့် Feather လုပ်ပါ။ <strong>Grow…</strong> က ချဲ့ပြီး <strong>Shrink…</strong> က ကျုံ့သည်။ Soft coverage ကို ထိန်းထားသည်။ Selection အသစ်အတွက် Feather setting ပြောင်းရုံဖြင့် လက်ရှိ Selection မပြောင်းပါ။</p>
 <p>Shapes ပေါင်းစပ်ပြီးနောက် သို့မဟုတ် Coverage ပြင်ပြီးနောက် Selection က Mask ဖြစ်သွားနိုင်သည်။ ထိုအခါ မူလ Rectangle/Oval controls မရှိတော့နိုင်ပါ။ Selection mask က ပြင်နိုင်သော နေရာကို ကန့်သတ်သည်။ Layer mask က Layer ၏ Visibility ကို ထိန်းသည်။</p>
+<p>ပေါင်းစပ်ထားသော Mask ကို ရွှေ့ရန် Rectangle Select သို့မဟုတ် Oval Select ရွေးပြီး ရွေးထားသောဧရိယာကို ဖိဆွဲပါ။ အပေါက်များနှင့် Soft edges ကိုပါ အတူရွှေ့ပေးသည်။ Rectangle/Oval resize controls မရှိလည်း ရွှေ့နိုင်သည်။</p>
 <div class="sl-heading-wrapper level-h2"><h2 id="stroke">Selection ပတ်လည် Border ဆွဲရန်</h2><a class="sl-anchor-link" href="#stroke"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore="">“Selection ပတ်လည် Border ဆွဲရန်” အပိုင်း</span></a></div>
 <p>လေးထောင့်ဘောင်၊ စက်ဝိုင်း သို့မဟုတ် Free shape Border ဆွဲရန် သုံးနိုင်သည်။</p>
 <ol>
