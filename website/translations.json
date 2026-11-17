@@ -28,16 +28,16 @@
     "my": "56664adccf7cf1cbb8e0beb83d8d42fe08e397c6df7c22cc522b0ab4074eec58"
   },
   "basics/selections": {
-    "en": "2f4c764e78d64d8451e92d0f2746b37142208342dff39cbbfc54a0d534e92159",
-    "my": "3dfddf4cdb4a078483c92d964d586578c15a8797eee0d9174b1fe83bbce41e1d"
+    "en": "7806feb14aa2a7b033c9c2f766e1ca3959841ebacb6e746b306db4dde8273ea2",
+    "my": "c8f536698b3951e384912c97fdca8d15d6940522b3428ff8c00923010ed62def"
   },
   "basics/masks": {
     "en": "44cac43ffa5fe4ca734c47804a41f3dab025e57dc32f73bc9e211aa6a60cbdd0",
     "my": "d1938fcbae9489446b3fa292dc5c4327575ac795afb9d4d292e93fad442f1c01"
   },
   "basics/previews": {
-    "en": "bea3b74ec500428abb624c6ce990ee82b6aa0d3f188c22cc0ffeb327e2d1b57b",
-    "my": "c2139e37166d11741d84cf3a02de91db2832fd60615d40b463aebe2b4fe67af1"
+    "en": "743348fa9d6e870327dc058a8bcd6c7da44e5b7fdca5c6733f425d6e33f5ebf7",
+    "my": "0c001b09a62bdbb3e544bac92b42d66d9df4226b16ffa5dddc67d27c4fc3af58"
   },
   "image/crop": {
     "en": "db8886c4530e73cda841c7391f9f5b0196b716767a41ab35c28ddd8241b419d3",
@@ -68,8 +68,8 @@
     "my": "77ebe1ef9138341a0707e2ed9e6ff4dc7c77118b1f994d46da4f3e722ce6ba99"
   },
   "guides/paint-retouch": {
-    "en": "4c1ca4ae3a361c6d31eda1a079b4015ce80f9abd83fa8a67888017ba571aa83e",
-    "my": "be8cbac7587c74b0b8d79c5f59e8484aaed5cce0bba1117d023d598c203b4475"
+    "en": "becf40bef63e07f8f7717fea9b1c0ad2ee4527f0ce49d977195af7825dd1996e",
+    "my": "ae2c1615588734c1366b89ff40d2a0f050f1680d1c401eec4dea7d777687abf4"
   },
   "guides/fills-gradients": {
     "en": "71634c4c1d6eb0020d79411a103351ba96ddcc841bd94002cba6dd883bb47cf5",
@@ -80,12 +80,12 @@
     "my": "35bfd705438ad9230907c491d630d03a74eee69640d323afc8e642f8fa76fdcf"
   },
   "guides/paths": {
-    "en": "b66b0fb54bb33d3b90494e4879870646b22a331f7e2f9d7029f6387580c9ed27",
-    "my": "5d2b1c7e6a791e0d7c154004ea0eaae104e214759f9f7b6e47a59c9b85e68006"
+    "en": "29a8d7c72397647fdd6676197194927ef2439d436625cd8ef2317b723e3f5332",
+    "my": "08ed3058bdd5e99eb7bf8c88ca71b6ddb2f252f595bf95681f2756e3623441ad"
   },
   "reference/selection": {
-    "en": "0ac87a9672a767eb9e709461e881494f578e362f0dc87c3ba329e2262e3845fd",
-    "my": "38f0411cbe32895534339d67d86df231ba10834ddff4aab4819cee29e652a428"
+    "en": "23d32b57d8aa7bdcf7ab453a80dd0284907ec298c9c070f8b0c7eb7cd1a23d14",
+    "my": "c5087db2916fb453119b847ee8c51d0f89bc1f1274c7729636fc89eeb9adde28"
   },
   "reference/painting": {
     "en": "ee255aafccd10c220e0b7aadc2689a84ab90e32a499eaadefff02f28cdde6333",
@@ -104,8 +104,8 @@
     "my": "faa83802f30c507a8c8e91cf9161b29554c71f22887b6ce80fca7f7a578fce82"
   },
   "reference/shortcuts": {
-    "en": "7da4de6affb4b8400b2669585e46c8b6bf8caf61df35305c50bc4df5c2c7acba",
-    "my": "da32ca1ebe2456e2c249f50d31e341a651b97453212dc17980419d80b87f24f9"
+    "en": "8d644829b6d4e89e3e92e69603cad2d0d9ecfdf31a0871a6aa6a44084224e841",
+    "my": "3f9ee99606e9e0eb8d03889888331ce1d22127175bee203b5dd3f70f9988f929"
   },
   "troubleshooting/painting": {
     "en": "3c3ab63597bacb397bcddb4078342763ebe6b1109aeb735e5be3901146bf17fb",

@@ -2,8 +2,8 @@
 title: "Selection Tools"
 description: "Rectangle၊ Oval၊ Free Select နှင့် Magic Wand တို့၏ Settings နှင့် အသုံးပြုပုံ။"
 translationKey: reference/selection
-sourceRevision: "1.2.3-guide-1"
-translatedRevision: "1.2.3-guide-1"
+sourceRevision: "1.2.3-selection-move-1"
+translatedRevision: "1.2.3-selection-move-1"
 ---
 
 Selection က ပုံဆွဲခြင်း၊ Fill၊ Clear နှင့် Effects အများအပြားကို ကန့်သတ်ပေးသည်။ Selection က Active Layer မဟုတ်ဘဲ Canvas နှင့် သက်ဆိုင်သည်။ Layer ပြောင်းလည်း Selection နေရာမပြောင်းပါ။
@@ -19,7 +19,7 @@ Active မြင်ရသော Raster Layer ၏ ရွေးထားသော�
 | Free Select | F | Vertex များကို Click လုပ်ပါ၊ သို့မဟုတ် ဖိဆွဲပြီး Outline ဆွဲပါ။ စမှတ်ကို Click လုပ်ခြင်း သို့မဟုတ် Return နှိပ်ခြင်းဖြင့် ပိတ်ပါ။ Escape က Cancel လုပ်သည်။ |
 | Magic Wand | W | ဆက်နေသော Color တူသည့်နေရာကို Click လုပ်ပါ။ Tolerance၊ Gap radius နှင့် Sample All Layers ပြင်နိုင်သည်။ |
 
-Selection အသစ်လုပ်စဉ် Shift က ဧရိယာပေါင်းသည်၊ Control က နုတ်သည်၊ Shift+Control က ထပ်နေသောအပိုင်းသာ ယူသည်။ ဤ Gesture များအတွက် macOS တွင်လည်း Control ကို သုံးပါ။
+Selection အသစ်လုပ်စဉ် Shift က ဧရိယာပေါင်းသည်၊ Cmd/Ctrl က နုတ်သည်၊ Shift+Cmd/Ctrl က ထပ်နေသောအပိုင်းသာ ယူသည်။ macOS တွင် Command၊ Windows/Linux တွင် Ctrl ကို သုံးပါ။ Rectangle သို့မဟုတ် Oval အသစ်ကို ဆွဲ၍ ပေါင်းစပ်နေစဉ် မူလ Selection outline နှင့် ဆွဲနေသော Shape ကို ရလဒ်အဆင်သင့်ဖြစ်သည်အထိ အတူပြထားသည်။
 
 ## ပုံသဏ္ဌာန်၊ Antialias နှင့် Feather {#edges}
 
@@ -28,6 +28,8 @@ Rectangle နှင့် Oval က Aspect ratio Settings ကို အတူသ�
 **Antialias edges** က မျဉ်းကွေးနှင့် ထောင့်များကို ချောစေသည်။ Feather ကဲ့သို့ ကျယ်ကျယ်ဖျော့ခြင်း မဟုတ်ပါ။ Wand တွင် Matching threshold ကို မပြောင်းဘဲ ရွေးပြီးသော Contour ကိုသာ ပြင်ပေးသည်။ Wand နှင့် Free Select တွင် Selection အသစ်များကိုသာ သက်ရောက်သည်။ Rectangle/Oval တွင် လက်ရှိ Editable curve ကိုလည်း ပြင်နိုင်သည်။
 
 **Feather new selections** က ဧရိယာအသစ်၏ အနားကို တဖြည်းဖြည်း ဖျော့သွားစေသည်။ Radius သည် ပုံ၏ Pixel 0–128၊ စတင်တန်ဖိုး 8 ဖြစ်ပြီး မူလပိတ်ထားသည်။ ရှိပြီးသားပုံသဏ္ဌာန်ကို Move/Resize လုပ်လျှင် ထပ်ပြီး Feather မလုပ်ပါ။ ရှိပြီးသား Selection အတွက် **Select → Feather…** သုံးပါ။ **Grow…** က ချဲ့ပြီး **Shrink…** က ကျုံ့သည်။
+
+Shape များ ပေါင်းစပ်ပြီးနောက် Rectangle Select သို့မဟုတ် Oval Select ဖြင့် ရွေးထားသောဧရိယာကို ဖိဆွဲလျှင် Mask တစ်ခုလုံး ရွှေ့နိုင်သည်။ အပေါက်များနှင့် Soft edges ကို မပြောင်းဘဲ Canvas အတွင်း အတူရွှေ့သည်။ အပေါက် သို့မဟုတ် မရွေးထားသောနေရာမှ ဆွဲလျှင် Selection အသစ် စသည်။ Complex mask တွင် Rectangle/Oval resize controls မရှိပါ။
 
 ## Magic Wand Settings {#wand}
 

@@ -2,8 +2,8 @@
 title: "ပုံဆွဲပြီး ပြန်ပြင်ရန်"
 description: "Brush ဖြင့် ပုံဆွဲခြင်း၊ Eraser သုံးခြင်းနှင့် Clone Stamp ဖြင့် ပုံပြင်နည်း။"
 translationKey: guides/paint-retouch
-sourceRevision: "1.2.3-guide-1"
-translatedRevision: "1.2.3-guide-1"
+sourceRevision: "1.2.3-tool-feedback-1"
+translatedRevision: "1.2.3-tool-feedback-1"
 ---
 
 ## Brush ဖြင့် ပုံဆွဲရန် {#steps}
@@ -11,7 +11,7 @@ translatedRevision: "1.2.3-guide-1"
 1. မြင်ရသော Raster Layer ကို ရွေးပါ။ ပုံဆွဲမှုကို သီးခြားထားရန် **Layer → New Layer…** ဖြင့် Layer အသစ်လုပ်ပါ။
 2. Toolbox swatch မှ [Foreground color ရွေးပါ](../../basics/colors/)။ Soft edge အတွက် **Brush**၊ Hard edge အတွက် **Pencil** သုံးပါ။
 3. Size၊ Opacity နှင့် ပါဝင်လျှင် Hardness ကို ပြင်ပါ။ `[` နှင့် `]` က Size ပြောင်းပေးသည်။ Brush ဆွဲရာတွင် ပိုငြိမ်စေရန် **Smoothing** တွင် **Light** သို့မဟုတ် **Strong** ရွေးပါ။
-4. ဖိဆွဲပြီး ပုံဆွဲပါ။ Pointer လွှတ်လျှင် Stroke တစ်ခုကို Apply လုပ်သည်။ မလွှတ်မီ Escape နှိပ်လျှင် ထို Stroke ကို Cancel လုပ်သည်။ Shift-click က ယခင် Stroke အဆုံးမှ မျဉ်းဖြောင့်ဆက်ပေးသည်။
+4. ဖိဆွဲပြီး ပုံဆွဲပါ။ Pointer လွှတ်လျှင် Stroke တစ်ခုကို Apply လုပ်သည်။ မလွှတ်မီ Escape နှိပ်လျှင် ထို Stroke ကို Cancel လုပ်သည်။ Shift ဖိထားလျှင် ယခင် Stroke အဆုံးမှ မျဉ်းဖြောင့် Guide ကို ပြသည်။ နှိပ်လိုက်လျှင် ထိုမျဉ်းကို ဆွဲပေးသည်။ Guide က Zoom/Pan အတိုင်း လိုက်ပြောင်းပြီး Pixel များကို မပြင်ပါ။
 5. Pixel များကို Transparent ဖြစ်အောင် ဖျက်ရန် **Eraser** (`E`) သုံးပါ။ နေရာကွက်ပြီး Blur/Sharpen လုပ်ရန် **Tools** ရှိ **Blur Brush** / **Sharpen Brush** သုံးပါ။
 
 ## ရလဒ် {#result}

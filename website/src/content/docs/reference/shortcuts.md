@@ -2,8 +2,8 @@
 title: "Keyboard shortcuts"
 description: "Platform modifiers, tool keys, canvas actions, and text-editing exceptions."
 translationKey: reference/shortcuts
-sourceRevision: "1.2.3-guide-1"
-translatedRevision: "1.2.3-guide-1"
+sourceRevision: "1.2.3-tool-feedback-1"
+translatedRevision: "1.2.3-tool-feedback-1"
 ---
 
 Use **Cmd** on macOS and **Ctrl** on Windows/Linux wherever this page says **Primary**. Plain tool letters work when focus is on the workspace; typing in a field or text layer keeps those letters as text.
@@ -41,7 +41,7 @@ Use **Cmd** on macOS and **Ctrl** on Windows/Linux wherever this page says **Pri
 | Brush smaller / larger | [ / ] |
 | Select All / Select None / Invert Selection | Primary+A / Primary+Shift+A / Primary+Shift+I |
 | Clear selected pixels to transparency | Delete / Backspace |
-| Add / Subtract / Intersect selection | Shift / Control / Shift+Control while selecting |
+| Add / Subtract / Intersect selection | Shift / Cmd/Ctrl / Shift+Cmd/Ctrl while selecting |
 | Swap foreground and background | X |
 
 Pencil, Brush, Blur Brush, and Sharpen Brush have no plain tool key. Choose them from the toolbox or Tools menu. Default Colors has no shortcut.
@@ -59,7 +59,7 @@ Pencil, Brush, Blur Brush, and Sharpen Brush have no plain tool key. Choose them
 
 ## Context matters {#context}
 
-Return on the canvas applies Crop/Gradient/transform previews, or closes Free Select/Path. Escape cancels those previews. In a numeric field, Return finishes the field and Escape restores its prior value instead.
+Return on the canvas applies Crop/Gradient/transform previews, closes Free Select, or finishes Path editing without closing the path. Cmd/Ctrl-click the first Path node to close it deliberately. Escape cancels those previews; in Path it ends editing without closing. In a numeric field, Return finishes the field and Escape restores its prior value instead.
 
 Text is different: Return adds a line; Escape or Primary+Enter commits typing. Undo steps through typing before image history. A focused sidebar toggle uses Return/Space to fold, and a focused Tool Options section header uses them to expand/collapse.
 

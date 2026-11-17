@@ -15,11 +15,11 @@ use gpui::{
 use crate::commands::{
     AlignLayer, ApplyCrop, ApplyCropOnCanvas, ApplyGradient, ApplyTransform, BackgroundColor,
     BrushSizeDown, BrushSizeUp, CancelCrop, CancelFreeSelect, CancelGradient, CancelMove,
-    CancelPath, CancelStroke, CancelTransform, CloseFreeSelect, ClosePath, CloseTab,
-    DeletePathAnchor, ExportImage, FeatherSelection, ForegroundColor, GrowSelection,
-    InvertSelection, MinimizeWindow, NEW_HINT, NewImage, NextTab, NudgeLayer, OPEN_HINT, OpenImage,
-    PreviousTab, Redo, ResetColors, ResetCurrentTool, SaveImage, SaveImageAs, SaveProjectAs,
-    SelectNone, SelectTool, ShrinkSelection, SwapColors, TOOL_GROUPS, ToggleGrid, ToggleGuides,
+    CancelPath, CancelStroke, CancelTransform, CloseFreeSelect, CloseTab, DeletePathAnchor,
+    ExportImage, FeatherSelection, FinishPath, ForegroundColor, GrowSelection, InvertSelection,
+    MinimizeWindow, NEW_HINT, NewImage, NextTab, NudgeLayer, OPEN_HINT, OpenImage, PreviousTab,
+    Redo, ResetColors, ResetCurrentTool, SaveImage, SaveImageAs, SaveProjectAs, SelectNone,
+    SelectTool, ShrinkSelection, SwapColors, TOOL_GROUPS, ToggleGrid, ToggleGuides,
     ToggleLayerBoundary, ToggleRightSidebar, ToggleSnapGrid, ToggleSnapGuides, ToggleToolOptions,
     Tool, Undo, Zoom, ZoomIn, ZoomOut, ZoomWindow,
 };
@@ -192,6 +192,11 @@ impl Render for Workspace {
                         this.commit_numeric_edit(window, cx);
                         this.numeric_followup = None;
                         this.preferences.tool = tool;
+                        if let Some(index) = this.active
+                            && let Some(finish) = this.tabs[index].pending_path_finish.as_mut()
+                        {
+                            finish.tool = tool;
+                        }
                         this.pan_drag = None;
                         this.clear_selection_gesture();
                         this.clear_move_preview(window, cx);
@@ -199,7 +204,7 @@ impl Render for Workspace {
                         if tool == Tool::Path {
                             this.preferences.inspector_tab = super::InspectorTab::Paths;
                         } else if was_path {
-                            this.end_path_session(cx);
+                            this.finish_path_session(window, cx);
                         }
                     }
                     if changed {
@@ -395,8 +400,8 @@ impl Render for Workspace {
                             .on_action(cx.listener(|this, _: &CancelPath, _, cx| {
                                 this.end_path_session(cx);
                             }))
-                            .on_action(cx.listener(|this, _: &ClosePath, window, cx| {
-                                this.close_active_path(window, cx);
+                            .on_action(cx.listener(|this, _: &FinishPath, window, cx| {
+                                this.finish_path_session(window, cx);
                             }))
                             .on_action(cx.listener(|this, _: &DeletePathAnchor, window, cx| {
                                 this.delete_path_anchor(window, cx);
@@ -555,6 +560,11 @@ impl Workspace {
             diameter: diameter as f32 * scale,
             hardness,
             soft: self.preferences.tool != Tool::Pencil,
+            line: self.stroke_line_preview().map(|anchor| StrokeLine {
+                anchor,
+                bounds: geometry.bounds,
+                canvas: tab.document.content.size(),
+            }),
             clone_source: self.clone_preview().map(|preview| CloneCursor {
                 preview,
                 bounds: geometry.bounds,
@@ -1173,6 +1183,8 @@ impl Workspace {
                         |this, event: &gpui::MouseDownEvent, window, cx| {
                             if event.button == MouseButton::Left
                                 && !this.space_pan
+                                && !(this.preferences.tool == Tool::Path
+                                    && this.path_control_hit(event.position, window.scale_factor()))
                                 && ((!event.modifiers.control
                                     && this.begin_guide(event.position, window.scale_factor(), cx))
                                     || (this.preferences.show_guides
@@ -1504,8 +1516,7 @@ impl Workspace {
                                 this.begin_path(
                                     event.position,
                                     window.scale_factor(),
-                                    event.modifiers.alt,
-                                    event.modifiers.shift,
+                                    event.modifiers,
                                     cx,
                                 );
                             }),
@@ -1591,6 +1602,8 @@ impl Workspace {
                                         .and_then(|pending| pending.selection.clone())
                                 })
                                 .unwrap_or_else(|| tab.selection.clone()),
+                            selection_base: self.selection_base_preview(),
+                            selection_offset: self.selection_preview_offset(),
                             show_handles: matches!(
                                 self.preferences.tool,
                                 Tool::Select | Tool::OvalSelect
@@ -2717,6 +2730,34 @@ impl Workspace {
             )
     }
 
+    fn pending_preview_feedback(&self) -> Option<String> {
+        let tab = self.active_tab()?;
+        if self.form.is_some() || self.dialog_open || tab.saving.is_some() || tab.exporting {
+            return None;
+        }
+        let name = match self.pending_canvas_edit_name()? {
+            "gradient" => "Gradient",
+            "crop" => "Crop",
+            "scale" => "Scale",
+            "transform" => self.preferences.tool.info().label,
+            _ => return None,
+        };
+        let dragging = self.crop_drag.is_some()
+            || self.scale_pointer_dragging()
+            || self
+                .gradient
+                .as_ref()
+                .is_some_and(|session| session.dragging())
+            || self.warp.as_ref().is_some_and(|session| session.dragging());
+        Some(preview_feedback(
+            name,
+            tab.editing || self.warp_applying,
+            dragging,
+            self.numeric_edit.is_some(),
+            self.warp_error.is_some(),
+        ))
+    }
+
     fn status_bar(&self, cx: &App) -> Div {
         let summary = if let Some(job) = &self.pdf_job {
             job.label()
@@ -2728,7 +2769,15 @@ impl Workspace {
                 |tab| {
                     let document = &tab.document;
                     let state = if tab.editing {
-                        "  ·  Editing…".to_owned()
+                        if tab
+                            .pending_canvas
+                            .as_ref()
+                            .is_some_and(|pending| pending.selection.is_none())
+                        {
+                            "  ·  Applying…".to_owned()
+                        } else {
+                            "  ·  Editing…".to_owned()
+                        }
                     } else if tab.exporting {
                         "  ·  Exporting…".to_owned()
                     } else if tab.saving.is_some() {
@@ -2759,11 +2808,15 @@ impl Workspace {
                         }
                         crate::selection::Selection::Mask(_) => "  ·  Custom selection".to_owned(),
                     };
-                    format!(
+                    let details = format!(
                         "{}  ·  {} × {} px{selection}{state}",
                         document.format.label(),
                         document.width(),
                         document.height()
+                    );
+                    self.pending_preview_feedback().map_or_else(
+                        || details.clone(),
+                        |feedback| format!("{feedback}  ·  {details}"),
                     )
                 },
             )
@@ -2781,7 +2834,15 @@ impl Workspace {
             .border_color(rgb(BORDER))
             .text_xs()
             .text_color(rgb(MUTED))
-            .child(div().flex_1().min_w_0().truncate().child(summary))
+            .child(
+                div()
+                    .id("document-status")
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .tooltip(tooltip(summary.clone()))
+                    .child(summary),
+            )
             .when_some(self.active_tab(), |bar, tab| {
                 let zoom = match tab.zoom {
                     Zoom::Fit => "Fit".to_owned(),
@@ -3285,6 +3346,27 @@ pub(super) fn icon(path: &'static str, edge: f32) -> Icon {
     Icon { path, edge }
 }
 
+fn preview_feedback(
+    name: &str,
+    applying: bool,
+    dragging: bool,
+    numeric: bool,
+    invalid: bool,
+) -> String {
+    let instruction = if applying {
+        "Applying…"
+    } else if dragging {
+        "Release to finish adjusting"
+    } else if numeric {
+        "Finish the field to continue"
+    } else if invalid {
+        "Adjust the invalid transform; Escape discards"
+    } else {
+        "Canvas Enter applies; Escape or changing tools discards"
+    };
+    format!("{name} preview — {instruction}")
+}
+
 #[derive(Clone, Copy)]
 struct BrushCursor {
     tool: Tool,
@@ -3292,6 +3374,24 @@ struct BrushCursor {
     hardness: u8,
     soft: bool,
     clone_source: Option<CloneCursor>,
+    line: Option<StrokeLine>,
+}
+
+#[derive(Clone, Copy)]
+struct StrokeLine {
+    anchor: (f64, f64),
+    bounds: Bounds<Pixels>,
+    canvas: (u32, u32),
+}
+
+impl StrokeLine {
+    fn start(self) -> Point<Pixels> {
+        self.bounds.origin
+            + point(
+                self.bounds.size.width * (self.anchor.0 / f64::from(self.canvas.0)) as f32,
+                self.bounds.size.height * (self.anchor.1 / f64::from(self.canvas.1)) as f32,
+            )
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -3345,6 +3445,26 @@ fn tool_cursor(
                 return;
             };
             if let Some(brush) = brush {
+                if window.modifiers().shift
+                    && !(brush.tool == Tool::CloneStamp && window.modifiers().alt)
+                    && let Some(line) = brush.line
+                {
+                    window.with_content_mask(
+                        Some(ContentMask {
+                            bounds: line.bounds.intersect(&bounds),
+                        }),
+                        |window| {
+                            for (weight, color) in [(3., rgb(0x12151c)), (1., rgb(0xffffff))] {
+                                let mut path = PathBuilder::stroke(px(weight));
+                                path.move_to(line.start());
+                                path.line_to(hotspot);
+                                if let Ok(path) = path.build() {
+                                    window.paint_path(path, color);
+                                }
+                            }
+                        },
+                    );
+                }
                 if !window.modifiers().alt
                     && let Some(source) = brush.clone_source
                     && let Some(center) = source.source_at(hotspot)
@@ -3480,6 +3600,8 @@ struct CanvasDecorations {
     layer_bounds: Option<preview::PixelRect>,
     scale_frame: Option<preview::PixelRect>,
     selection: crate::selection::Selection,
+    selection_base: Option<crate::selection::Selection>,
+    selection_offset: (i64, i64),
     show_handles: bool,
     move_layer: Option<super::layers::MovePaint>,
     warp: Option<super::transform_ui::WarpFrame>,
@@ -3510,6 +3632,8 @@ fn image_preview(
         layer_bounds,
         scale_frame,
         selection,
+        selection_base,
+        selection_offset,
         show_handles,
         move_layer,
         warp,
@@ -3534,6 +3658,9 @@ fn image_preview(
     let zoom = tab.zoom;
     let pan = tab.pan;
     let contours = selection.contours(width, height);
+    let base_contours = selection_base
+        .as_ref()
+        .map(|base| base.contours(width, height));
     let handle_rect = show_handles
         .then(|| super::selection::adjustable_rect(selection.clone()))
         .flatten();
@@ -3611,14 +3738,32 @@ fn image_preview(
                 &paths,
                 active_path,
             );
+            if let Some(base) = selection_base.as_ref() {
+                paint_contours(
+                    window,
+                    &geometry,
+                    width,
+                    height,
+                    visible,
+                    base_contours.as_deref().unwrap_or_default(),
+                );
+                paint_segments(
+                    window,
+                    &geometry,
+                    (width, height),
+                    visible,
+                    base.outline_edges(),
+                    (0, 0),
+                );
+            }
             paint_contours(window, &geometry, width, height, visible, &contours);
             paint_segments(
                 window,
                 &geometry,
-                width,
-                height,
+                (width, height),
                 visible,
                 selection.outline_edges(),
+                selection_offset,
             );
             paint_free_outline(
                 window,
@@ -4061,9 +4206,13 @@ fn paint_path_handles(
         ))
     };
     window.with_content_mask(Some(ContentMask { bounds: viewport }), |window| {
+        // Paint handles first so every node square remains visibly on top,
+        // matching hit testing even when neighboring controls overlap.
         for path in paths {
-            let current = Some(path.id) == active;
             for anchor in &path.anchors {
+                if !super::path_ui::node_selected(active, selected.as_ref(), path.id, anchor.id) {
+                    continue;
+                }
                 let center = project(anchor.point);
                 if anchor.handle_in != anchor.point {
                     paint_handle_line(window, center, project(anchor.handle_in));
@@ -4071,10 +4220,15 @@ fn paint_path_handles(
                 if anchor.handle_out != anchor.point {
                     paint_handle_line(window, center, project(anchor.handle_out));
                 }
-                let selected = selected.as_ref().is_some_and(|selected| {
-                    selected.path == path.id && selected.ids.contains(&anchor.id)
-                });
-                let edge = if selected { 9. } else { 7. };
+            }
+        }
+        for path in paths {
+            let current = Some(path.id) == active;
+            for anchor in &path.anchors {
+                let center = project(anchor.point);
+                let selected =
+                    super::path_ui::node_selected(active, selected.as_ref(), path.id, anchor.id);
+                let edge = super::path_ui::node_marker_size(selected);
                 window.paint_quad(gpui::quad(
                     Bounds::centered_at(center, size(px(edge), px(edge))),
                     px(1.),
@@ -4175,10 +4329,10 @@ fn paint_free_outline(
 fn paint_segments(
     window: &mut Window,
     geometry: &PreviewGeometry,
-    width: u32,
-    height: u32,
+    (width, height): (u32, u32),
     visible: Bounds<Pixels>,
     segments: &[(i32, i32, i32, i32)],
+    offset: (i64, i64),
 ) {
     if segments.is_empty() || width == 0 || height == 0 {
         return;
@@ -4187,6 +4341,12 @@ fn paint_segments(
     let phase = marching_phase(START.get_or_init(Instant::now).elapsed());
     let mut distance = 0.0;
     for &(x0, y0, x1, y1) in segments {
+        let (x0, y0, x1, y1) = (
+            i64::from(x0) + offset.0,
+            i64::from(y0) + offset.1,
+            i64::from(x1) + offset.0,
+            i64::from(y1) + offset.1,
+        );
         let from = geometry.project(point(x0 as f32 / width as f32, y0 as f32 / height as f32));
         let to = geometry.project(point(x1 as f32 / width as f32, y1 as f32 / height as f32));
         paint_marching_span(window, from, to, phase, distance, visible);

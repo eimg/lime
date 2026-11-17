@@ -2,17 +2,17 @@
 title: "Draw and use paths"
 description: "Edit Bézier anchors, convert paths to selections, and stroke a path."
 translationKey: guides/paths
-sourceRevision: "1.2.2-guide-1"
-translatedRevision: "1.2.2-guide-1"
+sourceRevision: "path-gestures-4"
+translatedRevision: "path-gestures-4"
 ---
 
 ## Draw a path {#steps}
 
 1. Choose **Path** (`P`). Click to place corner anchors, or drag as you place an anchor to pull curve handles.
-2. To close an outline, click the first anchor when it is selected alone, or press Return. Escape ends the current path; a later click starts another.
-3. Drag an anchor or handle to reshape the curve. Alt-click a visible curve to insert an anchor without changing its shape, then drag to reposition it if needed.
+2. **Enter** or choosing another tool finishes editing without closing the path. The next click on empty canvas starts a new path. To edit an existing path, click one of its nodes. To continue an open path, select either endpoint, then click to add nodes at that end. Select an endpoint or press Enter before adding nodes after editing an interior node.
+3. Drag a node square to move it immediately. Only selected nodes show handles; drag those handles to bend the curve. Use **Cmd** on macOS and **Ctrl** on Windows/Linux for the following edits. **Cmd/Ctrl-drag** a node to pull symmetric handles without moving the node. **Cmd/Ctrl-click the first node** to deliberately close an outline with at least three nodes. Escape ends editing without closing and discards an unfinished drag. **Cmd/Ctrl-click** (or **Alt/Option-click**) a visible curve to insert a node without changing its shape; continue dragging to reposition it if needed.
 4. Shift-click anchors to select a group. Drag one selected anchor to move the group, or use **Corner**, **Smooth**, and Delete/Backspace on the group. **All Anchors** and **Deselect** are in Tool Options.
-5. Use **Paths**, beside Layers, to select a path and toggle its visibility.
+5. Use **Paths**, beside Layers, to select a path and toggle its visibility. Hidden paths stay unchanged when drawing: even if a hidden path is selected, clicking empty canvas starts a new visible path.
 
 ## Make a selection or paint the curve {#use}
 

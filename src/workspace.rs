@@ -66,6 +66,8 @@ struct PendingCanvas {
     paint: Option<layers::MovePaint>,
     crop: Option<CropRect>,
     selection: Option<Selection>,
+    selection_base: Option<Selection>,
+    selection_offset: (i64, i64),
     free_points: Vec<Point<f32>>,
 }
 
@@ -89,6 +91,7 @@ struct Tab {
     pending_opacity: Option<(LayerId, u8)>,
     pending_guides: Option<Vec<crate::guides::Guide>>,
     pending_canvas: Option<PendingCanvas>,
+    pending_path_finish: Option<path_ui::PendingPathFinish>,
 }
 
 impl Tab {
@@ -186,6 +189,12 @@ impl Tab {
         self.editing = false;
         self.pending_opacity = None;
         self.pending_guides = None;
+        let path_finish = self
+            .pending_path_finish
+            .filter(|finish| finish.generation == generation);
+        if path_finish.is_some() {
+            self.pending_path_finish = None;
+        }
         let Some((content, edited_layer, edited_selection, patch)) = result else {
             return (false, Vec::new());
         };
@@ -227,6 +236,9 @@ impl Tab {
             self.pan = Point::default();
         }
         self.document.content = content;
+        if let Some(finish) = path_finish {
+            finish.apply(&mut self.document.content);
+        }
         let replaced = self.document.canvas.apply(patch);
         self.history
             .enforce_tab_limits(&self.document.content, &self.selection, &LIMITS);
@@ -747,6 +759,7 @@ impl Workspace {
             pending_opacity: None,
             pending_guides: None,
             pending_canvas: None,
+            pending_path_finish: None,
         });
         self.next_id += 1;
         self.select_tab(self.tabs.len() - 1, window, cx);
@@ -961,6 +974,14 @@ impl Workspace {
         }
         if retain_preview || matches!(change, Change::Selection) {
             let paint = retain_preview.then(|| self.take_move_paint()).flatten();
+            let selection_base = matches!(change, Change::Selection)
+                .then(|| self.selection_base_preview())
+                .flatten();
+            let selection_offset = if matches!(change, Change::Selection) {
+                self.selection_preview_offset()
+            } else {
+                (0, 0)
+            };
             let tab = &mut self.tabs[index];
             tab.pending_canvas = Some(PendingCanvas {
                 generation: tab.history.generation(),
@@ -972,6 +993,8 @@ impl Workspace {
                         .clone()
                         .unwrap_or_else(|| tab.selection.clone())
                 }),
+                selection_base,
+                selection_offset,
                 free_points: if matches!(change, Change::Selection) {
                     self.free_points.clone()
                 } else {
@@ -1032,6 +1055,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let path_finish = self
+            .tab_index(id)
+            .and_then(|index| self.tabs[index].pending_path_finish)
+            .filter(|finish| finish.generation == generation);
         if self.text_settled == Some(id) {
             self.drop_settled_text(window, cx);
         }
@@ -1067,6 +1094,26 @@ impl Workspace {
         self.finish_numeric_followup(id, generation, published, window, cx);
         self.finish_pending_nudge(id, generation, published, window, cx);
         self.finish_pending_selection_inputs(id, generation, change, published, window, cx);
+        if let Some(finish) = path_finish
+            && self.preferences.tool == finish.tool
+            && matches!(
+                finish.tool,
+                crate::commands::Tool::ScaleLayer
+                    | crate::commands::Tool::Rotate
+                    | crate::commands::Tool::Flip
+                    | crate::commands::Tool::Perspective
+            )
+            && self.active_tab().is_some_and(|tab| {
+                tab.id == id
+                    && !tab.busy()
+                    && tab.active_layer == finish.layer
+                    && tab.history.generation() == generation + u64::from(published)
+            })
+            && self.scale_drag.is_none()
+            && self.warp.is_none()
+        {
+            self.begin_layer_transform_preview(window, cx);
+        }
     }
 
     // Publishes a background result only if the tab has not changed since the job started.
@@ -1258,6 +1305,7 @@ mod preview_handoff_tests {
             pending_opacity: None,
             pending_guides: None,
             pending_canvas: None,
+            pending_path_finish: None,
         }
     }
 
@@ -1284,9 +1332,13 @@ mod preview_handoff_tests {
                 }),
                 crop: None,
                 selection: None,
+                selection_base: Some(Selection::Rect(crate::preview::PixelRect::new(2, 2, 8, 8))),
+                selection_offset: (3, 2),
                 free_points: Vec::new(),
             });
-            assert!(tab.pending_canvas().is_some());
+            assert_eq!(tab.pending_canvas().unwrap().selection_offset, (3, 2));
+            assert!(tab.pending_canvas().unwrap().selection_base.is_some());
+            assert_eq!(tab.state().selection, Selection::Unrestricted);
             // A completion from a different job must not consume this handoff.
             assert!(!tab.publish_change(99, Change::Edit, None, 0).0);
             assert!(tab.pending_canvas().is_some());

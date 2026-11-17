@@ -2,8 +2,8 @@
 title: "Preview၊ Apply၊ Cancel နှင့် Undo"
 description: "Draft နှင့် Commit လုပ်ထားသော Edit ခွဲခြားပြီး Numeric field၊ Text နှင့် Preview ကို အဆုံးသတ်နည်း။"
 translationKey: "basics/previews"
-sourceRevision: "1.2.3-preview-1"
-translatedRevision: "1.2.3-preview-1"
+sourceRevision: "1.2.3-tool-feedback-1"
+translatedRevision: "1.2.3-tool-feedback-1"
 ---
 
 ## Tool preview အဆုံးသတ်ရန် {#tool-previews}
@@ -16,7 +16,9 @@ Crop၊ Gradient၊ Scale Layer၊ Rotate၊ Flip နှင့် Perspective �
 
 Scale နှင့် Warp tools က Preview ပြန်ညှိနေစဉ် မူလ Pixel များကို ထိန်းထားသည်။ Apply မလုပ်မီ ထပ်ပြင်ခြင်းကြောင့် Layer ကို အကြိမ်ကြိမ် Resample မလုပ်ပါ။ Tool၊ Layer သို့မဟုတ် Tab ပြောင်းလျှင် ထို Transform preview ကို Cancel လုပ်သည်။ Apply/Cancel ပြီးလျှင် Transform controls ပျောက်သည်။ Session အသစ် စရန် Tool ကို ပြန်ရွေးပါ။
 
-Apply နှိပ်ပြီးနောက် Edit အပြီးသတ်ကို ပြင်ဆင်နေစဉ် Canvas ပေါ်ရှိ Preview ကို ဆက်ပြထားသည်။
+မပြီးသေးသော Preview ကို Status bar တွင် ပြပြီး Canvas တွင် Enter က Apply လုပ်ကြောင်း၊ Escape သို့မဟုတ် Tool ပြောင်းခြင်းက Discard လုပ်ကြောင်း ပြသည်။ Drag ဆွဲနေစဉ်၊ Numeric field ပြင်နေစဉ် သို့မဟုတ် Transform မမှန်သေးလျှင် Apply မလုပ်မီ လုပ်ရမည့်အဆင့်ကို ပြသည်။ မပြင်ရသေးသော Scale၊ Rotate သို့မဟုတ် Perspective session ကို Pending edit ဟု မပြပါ။ Status ပေါ် Hover လုပ်လျှင် စာသားအပြည့်ကို ဖတ်နိုင်သည်။
+
+Apply နှိပ်ပြီးနောက် Edit အပြီးသတ်ကို ပြင်ဆင်နေစဉ် Canvas ပေါ်ရှိ Preview ကို ဆက်ပြထားပြီး Status တွင် Apply လုပ်နေကြောင်း ပြသည်။
 
 ## Numeric field အတွင်း Edit {#fields}
 

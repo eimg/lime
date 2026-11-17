@@ -2,8 +2,8 @@
 title: "Previews, Apply, Cancel, and undo"
 description: "Know when an edit is a draft, how to finish numeric fields, and how text differs from transforms."
 translationKey: "basics/previews"
-sourceRevision: "1.2.3-preview-1"
-translatedRevision: "1.2.3-preview-1"
+sourceRevision: "1.2.3-tool-feedback-1"
+translatedRevision: "1.2.3-tool-feedback-1"
 ---
 
 ## Finish a tool preview {#tool-previews}
@@ -16,7 +16,9 @@ Crop, Gradient, Scale Layer, Rotate, Flip, and Perspective can show a draft on t
 
 Scale and the warp tools keep the original pixels while you revise their preview. Repeated adjustments before Apply do not repeatedly resample the committed layer. Switching tools, layers, or tabs cancels those transform previews. Apply/Cancel dismiss the transform controls; select the tool again to begin another session.
 
-After Apply, the visible canvas draft stays in place while the finished edit is prepared.
+The status bar identifies a pending preview and reminds you that Enter on the canvas applies it while Escape or changing tools discards it. During a drag, numeric edit, or invalid transform, it shows the step needed before applying instead. An untouched Scale, Rotate, or Perspective session is not marked as a pending edit. Hover over the status for its full text.
+
+After Apply, the visible canvas draft stays in place while the finished edit is prepared, and the status shows that the edit is being applied.
 
 ## Numeric fields have their own edit {#fields}
 

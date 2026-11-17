@@ -293,6 +293,27 @@ impl Workspace {
         })
     }
 
+    pub(super) fn stroke_line_preview(&self) -> Option<(f64, f64)> {
+        if self.stroke.is_some() {
+            return None;
+        }
+        let tab = self.active_tab()?;
+        let anchor = stroke_line_anchor(tab, self.preferences.tool)?;
+        if self.preferences.tool == Tool::CloneStamp {
+            // Source validity is independent of the Show Source preference.
+            self.clone_source.as_ref()?.kind(
+                self.clone_target()?,
+                anchor,
+                self.preferences.clone_aligned,
+            )?;
+        }
+        let offset = tab.document.content.layer(tab.active_layer)?.offset;
+        Some((
+            anchor.0 + f64::from(offset.0),
+            anchor.1 + f64::from(offset.1),
+        ))
+    }
+
     pub(super) fn brush_smoothing(&self) -> Smoothing {
         self.preferences.brushes.smoothing(self.preferences.tool)
     }
@@ -513,10 +534,7 @@ impl Workspace {
             },
             patches: BTreeMap::new(),
         };
-        if shift
-            && let Some((anchor_layer, x, y)) = tab.stroke_anchor
-            && anchor_layer == id
-        {
+        if shift && let Some((x, y)) = stroke_line_anchor(tab, self.preferences.tool) {
             session.paint(x, y);
         }
         session.paint(here.0, here.1);
@@ -524,10 +542,8 @@ impl Workspace {
         self.stroke_token = token;
         self.stroke = Some(session);
         self.refresh_stroke_patch(window, cx);
-        if self.preferences.tool == Tool::CloneStamp {
-            // Establish the source cursor delta even if the first dab is a no-op.
-            cx.notify();
-        }
+        // Hide the line guide and update the clone cursor even for a no-op first dab.
+        cx.notify();
     }
 
     pub(super) fn finish_clone_alignment(&mut self, tab: usize, generation: u64, published: bool) {
@@ -849,6 +865,19 @@ fn stroke_kind(tool: Tool) -> Option<StrokeKind> {
     }
 }
 
+// Shared by the actual connector and its cursor guide. Coordinates remain layer-local.
+fn stroke_line_anchor(tab: &super::Tab, tool: Tool) -> Option<(f64, f64)> {
+    if tab.busy() || stroke_kind(tool).is_none() {
+        return None;
+    }
+    let layer = tab.document.content.layer(tab.active_layer)?;
+    if !layer.visible || layer.text.is_some() || (tool == Tool::Eraser && layer.locks.alpha) {
+        return None;
+    }
+    let (id, x, y) = tab.stroke_anchor?;
+    (id == layer.id && x.is_finite() && y.is_finite()).then_some((x, y))
+}
+
 fn local_point(canvas: (f64, f64), offset: (i32, i32)) -> (f64, f64) {
     (
         canvas.0 - f64::from(offset.0),
@@ -860,5 +889,46 @@ fn clone_kind(source: (u32, u32), offset: (i32, i32), here: (f64, f64)) -> Strok
     StrokeKind::Clone {
         dx: i64::from(source.0) - i64::from(offset.0) - here.0.floor() as i64,
         dy: i64::from(source.1) - i64::from(offset.1) - here.1.floor() as i64,
+    }
+}
+
+#[cfg(test)]
+mod line_preview_tests {
+    use super::*;
+
+    #[test]
+    fn connector_requires_a_committed_anchor_on_a_paintable_active_layer() {
+        let mut tab = super::super::preview_handoff_tests::tab();
+        tab.editing = false;
+        assert_eq!(stroke_line_anchor(&tab, Tool::Brush), None);
+        tab.stroke_anchor = Some((tab.active_layer, 3.5, 9.25));
+        for tool in [
+            Tool::Pencil,
+            Tool::Brush,
+            Tool::Eraser,
+            Tool::Blur,
+            Tool::Sharpen,
+            Tool::CloneStamp,
+        ] {
+            assert_eq!(stroke_line_anchor(&tab, tool), Some((3.5, 9.25)));
+        }
+        assert_eq!(stroke_line_anchor(&tab, Tool::Gradient), None);
+        tab.editing = true;
+        assert_eq!(stroke_line_anchor(&tab, Tool::Brush), None);
+        tab.editing = false;
+        tab.document.content.set_visible(tab.active_layer, false);
+        assert_eq!(stroke_line_anchor(&tab, Tool::Brush), None);
+        tab.document.content.set_visible(tab.active_layer, true);
+        tab.document.content.set_layer_locks(
+            tab.active_layer,
+            crate::document::LayerLocks {
+                alpha: true,
+                position: false,
+            },
+        );
+        assert_eq!(stroke_line_anchor(&tab, Tool::Eraser), None);
+        assert_eq!(stroke_line_anchor(&tab, Tool::Brush), Some((3.5, 9.25)));
+        tab.stroke_anchor = Some((LayerId(tab.active_layer.0 + 1), 3.5, 9.25));
+        assert_eq!(stroke_line_anchor(&tab, Tool::Brush), None);
     }
 }

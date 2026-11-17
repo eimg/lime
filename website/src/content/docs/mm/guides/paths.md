@@ -2,17 +2,17 @@
 title: "Path ဆွဲပြီး အသုံးပြုရန်"
 description: "Bézier anchor များပြင်ခြင်း၊ Selection ပြောင်းခြင်းနှင့် Path အတိုင်း Stroke ဆွဲနည်း။"
 translationKey: guides/paths
-sourceRevision: "1.2.2-guide-1"
-translatedRevision: "1.2.2-guide-1"
+sourceRevision: "path-gestures-4"
+translatedRevision: "path-gestures-4"
 ---
 
 ## Path ဆွဲရန် {#steps}
 
 1. **Path** (`P`) ရွေးပါ။ ထောင့် Anchor ထားရန် Click လုပ်ပါ။ မျဉ်းကွေး Handle ထုတ်ရန် Anchor ချစဉ် ဖိဆွဲပါ။
-2. Outline ပိတ်ရန် စမှတ်ကို တစ်ခုတည်းရွေးထားစဉ် Click လုပ်ပါ၊ သို့မဟုတ် Return နှိပ်ပါ။ Escape က လက်ရှိ Path ကို အဆုံးသတ်သည်။ နောက် Click က Path အသစ်စသည်။
-3. Anchor သို့မဟုတ် Handle ဆွဲပြီး Curve ပြင်ပါ။ မြင်ရသော Curve ကို Alt-click လုပ်လျှင် ပုံသဏ္ဌာန်မပြောင်းဘဲ Anchor အသစ်ထည့်သည်။ ထိုမှတ်ကို ဆက်ဆွဲပြီး နေရာပြောင်းနိုင်သည်။
+2. **Enter** နှိပ်ခြင်း သို့မဟုတ် အခြား Tool ရွေးခြင်းက Path ကို မပိတ်ဘဲ ပြင်ဆင်ခြင်းကို အဆုံးသတ်သည်။ ထို့နောက် Canvas လွတ်နေရာကို Click လုပ်လျှင် Path အသစ်စသည်။ ရှိပြီးသား Path ပြင်ရန် Node တစ်ခုကို Click လုပ်ပါ။ ဖွင့်ထားသော Path ဆက်ဆွဲရန် အစွန်းနှစ်ဖက်ထဲမှ တစ်ဖက်ကို ရွေးပြီး ထိုဘက်၌ Node များ ထပ်ထည့်ပါ။ အလယ် Node ကို ပြင်ပြီးနောက် Node ထပ်ထည့်လိုလျှင် အစွန်း Node ကို ရွေးပါ၊ သို့မဟုတ် Enter နှိပ်ပြီး Path အသစ်စပါ။
+3. Node ၏ လေးထောင့်ကွက်ကို တစ်ခါတည်း ဖိဆွဲပြီး ရွှေ့နိုင်သည်။ ရွေးထားသော Node များ၏ Handle ကိုသာ ပြသည်။ Curve ကွေးရန် ထို Handle ကို ဆွဲပါ။ အောက်ပါ ပြင်ဆင်မှုများအတွက် macOS တွင် **Cmd**၊ Windows/Linux တွင် **Ctrl** သုံးပါ။ Node ကို မရွှေ့ဘဲ ညီမျှသော Handle နှစ်ဖက်ထုတ်ရန် **Cmd/Ctrl-drag** လုပ်ပါ။ Node အနည်းဆုံး သုံးခုရှိသော Outline ကို ပိတ်ရန် **ပထမ Node ကို Cmd/Ctrl-click** လုပ်ပါ။ Escape က Path ကို မပိတ်ဘဲ ပြင်ဆင်ခြင်းကို အဆုံးသတ်ပြီး မပြီးသေးသော Drag ကို ပယ်ဖျက်သည်။ မြင်ရသော Curve ကို **Cmd/Ctrl-click** (သို့မဟုတ် **Alt/Option-click**) လုပ်လျှင် ပုံသဏ္ဌာန်မပြောင်းဘဲ Node အသစ်ထည့်သည်။ ထိုမှတ်ကို ဆက်ဆွဲပြီး နေရာပြောင်းနိုင်သည်။
 4. Anchor များကို Shift-click ဖြင့် အစုလိုက်ရွေးပါ။ ရွေးထားသော Anchor တစ်ခုကို ဆွဲလျှင် အစုလိုက်ရွှေ့သည်။ **Corner**၊ **Smooth** နှင့် Delete/Backspace လည်း ရွေးထားသောအစုကို သက်ရောက်သည်။ Tool Options တွင် **All Anchors** နှင့် **Deselect** ရှိသည်။
-5. Layers ဘေးရှိ **Paths** တွင် Path ရွေးပြီး Visibility ပြောင်းနိုင်သည်။
+5. Layers ဘေးရှိ **Paths** တွင် Path ရွေးပြီး Visibility ပြောင်းနိုင်သည်။ ဖျောက်ထားသော Path ကို ရွေးထားသော်လည်း Canvas လွတ်နေရာကို Click လုပ်လျှင် မြင်ရသော Path အသစ်စသည်။ ဖျောက်ထားသော Path ၏ ပုံသဏ္ဌာန်ကို မပြောင်းပါ။
 
 ## Selection ပြောင်းရန် သို့မဟုတ် Stroke ဆွဲရန် {#use}
 

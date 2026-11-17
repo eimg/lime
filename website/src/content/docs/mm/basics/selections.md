@@ -2,8 +2,8 @@
 title: "Selection၊ Antialias နှင့် Feather"
 description: "Selection ဖြင့် ပြင်မည့်နေရာ ကန့်သတ်ခြင်း၊ ပေါင်းစပ်ခြင်း၊ အနားပြင်ခြင်းနှင့် Border ဆွဲနည်း။"
 translationKey: "basics/selections"
-sourceRevision: "1.2.3-guide-1"
-translatedRevision: "1.2.3-guide-1"
+sourceRevision: "1.2.3-selection-move-1"
+translatedRevision: "1.2.3-selection-move-1"
 ---
 
 ## Selection အလုပ်လုပ်ပုံ {#meaning}
@@ -16,7 +16,7 @@ Selection outline က ဘောင်ကိုသာ ပြသည်။ အန�
 
 1. **Select** menu သို့မဟုတ် Toolbox မှ **Rectangle Select**၊ **Oval Select**၊ **Free Select** သို့မဟုတ် **Magic Wand** ကို ရွေးပါ။
 2. Rectangle/Oval ကို ဆွဲပါ၊ Free outline ကို ပိတ်ပါ သို့မဟုတ် Wand ဖြင့် ဆက်နေသော နေရာကို နှိပ်ပါ။
-3. နောက်ထပ် Selection လုပ်စဉ် **Shift** ကို ဖိထားပြီး ထပ်ပေါင်းပါ။ **Control** ဖြင့် နုတ်ပါ။ **Shift+Control** ဖြင့် နှစ်ခုထပ်နေသော နေရာကိုသာ ယူပါ။ macOS တွင်လည်း ဤ Gesture များအတွက် Control ကို သုံးသည်။
+3. နောက်ထပ် Selection လုပ်စဉ် **Shift** ကို ဖိထားပြီး ထပ်ပေါင်းပါ။ **Cmd/Ctrl** ဖြင့် နုတ်ပါ။ **Shift+Cmd/Ctrl** ဖြင့် နှစ်ခုထပ်နေသော နေရာကိုသာ ယူပါ။ macOS တွင် Command၊ Windows/Linux တွင် Ctrl ကို သုံးပါ။
 4. Active layer ပေါ်တွင် ပုံဆွဲပါ သို့မဟုတ် Fill လုပ်ပါ။ အခြားနေရာပြင်ရန် ကန့်သတ်မှုဖယ်လိုလျှင် **Select → Select None** ကို ရွေးပါ။
 
 စက်ဝိုင်းအတွက် Oval Select တွင် **1:1** ရွေးပါ။ Rectangle နှင့် Oval က Aspect ratio တစ်ခုတည်းကို မျှဝေသုံးသည်။ Crop က သီးခြား မှတ်ထားသည်။ Fixed ratio ရွေးလျှင် လက်ရှိ Editable shape ကိုလည်း Center မပြောင်းဘဲ ပြန်ညှိပေးသည်။
@@ -28,6 +28,8 @@ Selection outline က ဘောင်ကိုသာ ပြသည်။ အန�
 ရှိပြီးသား Selection ကို **Select → Feather…** ဖြင့် Feather လုပ်ပါ။ **Grow…** က ချဲ့ပြီး **Shrink…** က ကျုံ့သည်။ Soft coverage ကို ထိန်းထားသည်။ Selection အသစ်အတွက် Feather setting ပြောင်းရုံဖြင့် လက်ရှိ Selection မပြောင်းပါ။
 
 Shapes ပေါင်းစပ်ပြီးနောက် သို့မဟုတ် Coverage ပြင်ပြီးနောက် Selection က Mask ဖြစ်သွားနိုင်သည်။ ထိုအခါ မူလ Rectangle/Oval controls မရှိတော့နိုင်ပါ။ Selection mask က ပြင်နိုင်သော နေရာကို ကန့်သတ်သည်။ Layer mask က Layer ၏ Visibility ကို ထိန်းသည်။
+
+ပေါင်းစပ်ထားသော Mask ကို ရွှေ့ရန် Rectangle Select သို့မဟုတ် Oval Select ရွေးပြီး ရွေးထားသောဧရိယာကို ဖိဆွဲပါ။ အပေါက်များနှင့် Soft edges ကိုပါ အတူရွှေ့ပေးသည်။ Rectangle/Oval resize controls မရှိလည်း ရွှေ့နိုင်သည်။
 
 ## Selection ပတ်လည် Border ဆွဲရန် {#stroke}
 

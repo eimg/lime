@@ -34,6 +34,7 @@ Windows downloads are unsigned. The macOS app is Developer ID signed and notariz
 - **Layers** — masks, blend modes, opacity, position locks, and movement link toggles.
   Shadows follow their source, and enabled movement links stay together.
   Right-click a layer for more actions.
+  Selected layers and paths share a clear accent outline in the sidebar.
 - **Selections and transforms** — rectangle, oval, freehand, magic wand, crop, scale, rotate, and perspective.
 - **Painting** — pencil, brush, eraser, clone stamp, gradients, and bucket fill.
   Per-tool settings and recent colors survive app restarts.
@@ -57,11 +58,13 @@ keeps essential tool controls, layer thumbnails with a **+** after the last laye
 each section scrolls independently without scrollbars. Use its top button to expand it.
 Finish an active drag before toggling the sidebar.
 Apply or cancel canvas previews before changing layer or path visibility.
+The status bar identifies pending previews and how to finish them.
 Applying keeps the preview visible until the finished edit is ready.
 Fold secondary option sections with the mouse or keyboard to leave more room for Layers and Paths;
 their headers summarize active settings. Oval Select uses **1:1** for circles.
 Aspect-ratio choices also reshape the current selection or crop box.
 Radius, aspect-ratio, and Antialias changes wait their turn while a selection updates.
+Combined selections keep their outline visible and remain movable by dragging a selected area.
 Typed numeric edits finish before Save and layer menu commands.
 Delete/Backspace clears the selected area of the active raster layer to transparency.
 Move uses a four-arrow cursor and always moves the active layer.
@@ -73,8 +76,12 @@ Perspective tools. Reselecting an active transform keeps its preview.
 Use Edit → **Stroke Path…** or **Stroke Selection…** to choose
 stroke settings; the Paths panel's **Stroke** button applies the shared settings
 directly. **Visible Paths to Selection** combines visible closed paths.
+Enter or changing tools finishes path editing without closing it. Drag nodes to
+move them, select an endpoint to continue, or Cmd/Ctrl-click the first node to close.
+Hidden paths stay unchanged when drawing a new path.
 For text requiring an input method, compose it elsewhere and paste it into Lime.
 
+Hold Shift while painting to preview a straight connector before clicking.
 Crop and paint strokes can start outside the canvas; crop stays within the image.
 Crop ignores drags whose area stays entirely outside the image.
 The status bar shows the current app version. **About Lime** includes source and

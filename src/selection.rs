@@ -933,7 +933,7 @@ impl Selection {
         }
     }
 
-    fn bounds(&self, width: u32, height: u32) -> Option<PixelRect> {
+    pub(crate) fn bounds(&self, width: u32, height: u32) -> Option<PixelRect> {
         match self {
             Self::Unrestricted | Self::Empty => None,
             Self::Full => Some(PixelRect::new(0, 0, width, height)),

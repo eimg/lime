@@ -1,4 +1,4 @@
-use gpui::{Context, Div, MouseButton, Pixels, Point, Window, div, point, prelude::*, px, rgb};
+use gpui::{Context, Div, MouseButton, Pixels, Point, Window, div, prelude::*, px, rgb};
 
 use super::Workspace;
 use super::canvas_tools::PreviewGeometry;
@@ -6,14 +6,44 @@ use super::numeric::NumericField;
 use super::stroke_ui::{PathStrokeStyle, StrokeSource};
 use super::tooltip::{help_icon, tooltip};
 use super::view::{
-    ACCENT, BORDER, DISABLED, HOVER, MUTED, SELECTED, TEXT, choice_button, icon, option_action,
-    option_row, section_label, segmented, step_button,
+    ACCENT, BORDER, CHROME, DISABLED, HOVER, MUTED, SELECTED, TEXT, choice_button, icon,
+    option_action, option_row, section_label, segmented, step_button,
 };
 use crate::commands::{PathToSelection, SelectionToPath};
 use crate::paths::{self, Anchor, AnchorId, HandleMode, PathId, VectorPath};
 use crate::preview::Dirty;
 
+/// Tool departure must also finish a path whose last anchor is still committing.
+#[derive(Clone, Copy)]
+pub(super) struct PendingPathFinish {
+    pub generation: u64,
+    pub layer: crate::document::LayerId,
+    pub tool: crate::commands::Tool,
+    path: PathId,
+}
+
+impl PendingPathFinish {
+    pub(super) fn apply(self, content: &mut crate::document::DocumentContent) {
+        if content.active_path_id() == Some(self.path) {
+            content.clear_active_path();
+        }
+    }
+}
+
 const HIT_PIXELS: f32 = 8.0;
+
+pub(super) fn node_selected(
+    active: Option<PathId>,
+    selection: Option<&AnchorSelection>,
+    path: PathId,
+    anchor: AnchorId,
+) -> bool {
+    active == Some(path) && selection.is_some_and(|s| s.path == path && s.ids.contains(&anchor))
+}
+
+pub(super) fn node_marker_size(selected: bool) -> f32 {
+    if selected { 9. } else { 7. }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct AnchorSelection {
@@ -72,9 +102,14 @@ enum PathEdit {
         origin: (f64, f64),
     },
     MovePoints {
-        anchor: AnchorId,
         bases: Vec<Anchor>,
         down: (f64, f64),
+    },
+    ShapeAnchor {
+        anchor: AnchorId,
+        down: (f64, f64),
+        threshold: f64,
+        dragged: bool,
     },
     MoveHandle {
         anchor: AnchorId,
@@ -86,7 +121,7 @@ enum PathEdit {
 
 impl PathGesture {
     fn update(&mut self, point: (f64, f64)) {
-        match &self.edit {
+        match &mut self.edit {
             PathEdit::Place { anchor, origin } => {
                 let Some(anchor) = self.path.anchor_mut(*anchor) else {
                     return;
@@ -95,9 +130,22 @@ impl PathGesture {
                 anchor.handle_out = point;
                 anchor.handle_in = (origin.0 - delta.0, origin.1 - delta.1);
             }
-            PathEdit::MovePoints { bases, down, .. } => {
+            PathEdit::MovePoints { bases, down } => {
                 self.path
                     .move_anchors_from(bases, (point.0 - down.0, point.1 - down.1));
+            }
+            PathEdit::ShapeAnchor {
+                anchor,
+                down,
+                threshold,
+                dragged,
+            } => {
+                let delta = (point.0 - down.0, point.1 - down.1);
+                *dragged |= delta.0.hypot(delta.1) > *threshold;
+                if *dragged && let Some(anchor) = self.path.anchor_mut(*anchor) {
+                    anchor.handle_out = (anchor.point.0 + delta.0, anchor.point.1 + delta.1);
+                    anchor.handle_in = (anchor.point.0 - delta.0, anchor.point.1 - delta.1);
+                }
             }
             PathEdit::MoveHandle {
                 anchor,
@@ -123,25 +171,94 @@ impl PathGesture {
         }
     }
 
-    fn close_on_click(&mut self, point: (f64, f64), radius: f64) {
-        if let PathEdit::MovePoints {
+    fn close_on_click(&mut self) {
+        if let PathEdit::ShapeAnchor {
             anchor,
-            down,
-            bases,
+            dragged: false,
+            ..
         } = &self.edit
-            && bases.len() == 1
-            && let Some(base) = self.baseline.as_ref()
-            && !base.closed
-            && base.anchors.len() >= 3
-            && base.anchors[0].id == *anchor
-            && (point.0 - down.0).hypot(point.1 - down.1) <= radius
+            && !self.path.closed
+            && self.path.anchors.len() >= 3
+            && self.path.anchors[0].id == *anchor
         {
-            self.path = base.clone();
             self.path.closed = true;
+        }
+    }
+
+    fn for_target(
+        path: VectorPath,
+        target: Target,
+        selection: &AnchorSelection,
+        down: (f64, f64),
+        modifiers: gpui::Modifiers,
+        threshold: f64,
+        mode: HandleMode,
+    ) -> Self {
+        let edit = match target {
+            Target::Handle {
+                anchor,
+                incoming,
+                at,
+                ..
+            } => PathEdit::MoveHandle {
+                anchor,
+                incoming,
+                grab: (at.0 - down.0, at.1 - down.1),
+                mode,
+            },
+            Target::Anchor { anchor, .. } if modifiers.secondary() => PathEdit::ShapeAnchor {
+                anchor,
+                down,
+                threshold,
+                dragged: false,
+            },
+            Target::Anchor { .. } => PathEdit::MovePoints {
+                bases: selection.anchors(&path),
+                down,
+            },
+        };
+        Self {
+            baseline: Some(path.clone()),
+            path,
+            edit,
         }
     }
 }
 
+// A selected hidden path may stay selected in the panel, but canvas creation
+// must start a visible path rather than silently extending invisible geometry.
+fn continuation_path(content: &crate::document::DocumentContent) -> Option<&VectorPath> {
+    content
+        .active_path()
+        .filter(|path| path.visible && !path.closed)
+}
+
+// Only an endpoint can extend an open component; editing an interior node must
+// not silently append to an unrelated endpoint or change the path topology.
+fn continuation_index(path: &VectorPath, selection: Option<&AnchorSelection>) -> Option<usize> {
+    if !path.visible || path.closed {
+        return None;
+    }
+    let Some(selection) = selection.filter(|selection| selection.path == path.id) else {
+        return Some(path.anchors.len());
+    };
+    let [anchor] = selection.ids.as_slice() else {
+        return None;
+    };
+    if path.anchors.last().is_some_and(|last| last.id == *anchor) {
+        Some(path.anchors.len())
+    } else if path
+        .anchors
+        .first()
+        .is_some_and(|first| first.id == *anchor)
+    {
+        Some(0)
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Target {
     Handle {
         path: PathId,
@@ -153,6 +270,89 @@ enum Target {
         path: PathId,
         anchor: AnchorId,
     },
+}
+
+impl Target {
+    fn nearest(
+        paths: &[VectorPath],
+        active: Option<PathId>,
+        selection: Option<&AnchorSelection>,
+        point: (f64, f64),
+        radius: f64,
+    ) -> Option<Self> {
+        let mut nearest = None;
+        let mut best = radius;
+        let ordered = || {
+            paths
+                .iter()
+                .filter(|path| path.visible && Some(path.id) == active)
+                .chain(
+                    paths
+                        .iter()
+                        .filter(|path| path.visible && Some(path.id) != active),
+                )
+        };
+        // The entire painted node square wins over handles, not only its
+        // exact center. Use the renderer's marker size at the current zoom.
+        for path in ordered() {
+            for anchor in &path.anchors {
+                let selected = node_selected(active, selection, path.id, anchor.id);
+                let half =
+                    f64::from(node_marker_size(selected)) / 2. * radius / f64::from(HIT_PIXELS);
+                let delta = (anchor.point.0 - point.0, anchor.point.1 - point.1);
+                let distance = delta.0.hypot(delta.1);
+                if delta.0.abs() <= half
+                    && delta.1.abs() <= half
+                    && (nearest.is_none() || distance < best)
+                {
+                    best = distance;
+                    nearest = Some(Self::Anchor {
+                        path: path.id,
+                        anchor: anchor.id,
+                    });
+                }
+            }
+        }
+        if nearest.is_some() {
+            return nearest;
+        }
+        // Outside the painted squares, choose the closest visible control.
+        for path in ordered() {
+            for anchor in &path.anchors {
+                let distance = (anchor.point.0 - point.0).hypot(anchor.point.1 - point.1);
+                if distance <= radius && (nearest.is_none() || distance < best) {
+                    best = distance;
+                    nearest = Some(Self::Anchor {
+                        path: path.id,
+                        anchor: anchor.id,
+                    });
+                }
+            }
+        }
+        for path in ordered() {
+            for anchor in &path.anchors {
+                if !node_selected(active, selection, path.id, anchor.id) {
+                    continue;
+                }
+                for (incoming, at) in [(true, anchor.handle_in), (false, anchor.handle_out)] {
+                    let distance = (at.0 - point.0).hypot(at.1 - point.1);
+                    if at != anchor.point
+                        && distance <= radius
+                        && (nearest.is_none() || distance < best)
+                    {
+                        best = distance;
+                        nearest = Some(Self::Handle {
+                            path: path.id,
+                            anchor: anchor.id,
+                            incoming,
+                            at,
+                        });
+                    }
+                }
+            }
+        }
+        nearest
+    }
 }
 
 impl Workspace {
@@ -387,7 +587,7 @@ impl Workspace {
                             .rounded_sm()
                             .border_1()
                             .border_color(rgb(if active == Some(id) { ACCENT } else { BORDER }))
-                            .when(active == Some(id), |row| row.bg(rgb(SELECTED)))
+                            .bg(rgb(if active == Some(id) { SELECTED } else { CHROME }))
                             .hover(|row| row.bg(rgb(HOVER)))
                             .cursor_pointer()
                             .tooltip(tooltip(format!(
@@ -424,7 +624,9 @@ impl Workspace {
                 .px_1()
                 .py_1()
                 .rounded_md()
-                .when(selected, |row| row.bg(rgb(SELECTED)))
+                .border_1()
+                .border_color(rgb(if selected { ACCENT } else { BORDER }))
+                .bg(rgb(if selected { SELECTED } else { CHROME }))
                 .hover(|row| row.bg(rgb(HOVER)))
                 .cursor_pointer()
                 .child(
@@ -707,8 +909,7 @@ impl Workspace {
         &mut self,
         position: Point<Pixels>,
         scale: f32,
-        insert: bool,
-        toggle: bool,
+        modifiers: gpui::Modifiers,
         cx: &mut Context<Self>,
     ) {
         if self.active_tab().is_none_or(|tab| tab.busy()) || self.path_gesture.is_some() {
@@ -717,6 +918,9 @@ impl Workspace {
         let Some(point) = self.canvas_point(position, scale) else {
             return;
         };
+        let edit = modifiers.secondary();
+        let insert = edit || modifiers.alt;
+        let toggle = modifiers.shift;
         if let Some(target) = self.path_target(position, scale) {
             let path_id = match target {
                 Target::Handle { path, .. } | Target::Anchor { path, .. } => path,
@@ -746,36 +950,15 @@ impl Workspace {
                 cx.notify();
                 return;
             }
-            let edit = match target {
-                Target::Handle {
-                    anchor,
-                    incoming,
-                    at,
-                    ..
-                } => PathEdit::MoveHandle {
-                    anchor,
-                    incoming,
-                    grab: (at.0 - point.0, at.1 - point.1),
-                    mode: self.preferences.path_handle_mode,
-                },
-                Target::Anchor { anchor, .. } => {
-                    let bases = self
-                        .path_selection
-                        .as_ref()
-                        .map(|selected| selected.anchors(&path))
-                        .unwrap_or_default();
-                    PathEdit::MovePoints {
-                        anchor,
-                        bases,
-                        down: point,
-                    }
-                }
-            };
-            self.path_gesture = Some(PathGesture {
-                baseline: Some(path.clone()),
+            self.path_gesture = Some(PathGesture::for_target(
                 path,
-                edit,
-            });
+                target,
+                self.path_selection.as_ref().unwrap(),
+                point,
+                modifiers,
+                self.path_hit_radius(scale) * 3. / f64::from(HIT_PIXELS),
+                self.preferences.path_handle_mode,
+            ));
             cx.notify();
             return;
         }
@@ -812,7 +995,10 @@ impl Workspace {
                 }
             }
             let Some((baseline, hit)) = nearest else {
-                self.notice("Alt-click a visible curve to insert an anchor.", cx);
+                self.notice(
+                    "Cmd/Ctrl-click or Alt/Option-click a visible curve to insert an anchor.",
+                    cx,
+                );
                 return;
             };
             if baseline.anchors.len() >= paths::MAX_ANCHORS {
@@ -832,7 +1018,6 @@ impl Workspace {
                 baseline: Some(baseline),
                 path,
                 edit: PathEdit::MovePoints {
-                    anchor: id,
                     bases: vec![anchor],
                     down: point,
                 },
@@ -846,7 +1031,7 @@ impl Workspace {
                 content.next_anchor_id(),
                 content.next_path_id(),
                 content.paths().len(),
-                content.active_path().filter(|path| !path.closed).cloned(),
+                continuation_path(content).cloned(),
             )
         }) else {
             return;
@@ -859,8 +1044,15 @@ impl Workspace {
                 self.notice("This path has enough anchors.", cx);
                 return;
             }
+            let Some(index) = continuation_index(&active, self.path_selection.as_ref()) else {
+                self.notice(
+                    "Select an endpoint to continue this path, or press Enter to start a new path.",
+                    cx,
+                );
+                return;
+            };
             let mut path = active.clone();
-            path.anchors.push(Anchor::corner(anchor_id, point));
+            path.anchors.insert(index, Anchor::corner(anchor_id, point));
             self.path_selection = Some(AnchorSelection::single(path.id, anchor_id));
             self.path_gesture = Some(PathGesture {
                 baseline: Some(active),
@@ -920,9 +1112,7 @@ impl Workspace {
         let Some(mut gesture) = self.path_gesture.take() else {
             return;
         };
-        if let Some(point) = self.canvas_point(position, scale) {
-            gesture.close_on_click(point, self.path_hit_radius(scale));
-        }
+        gesture.close_on_click();
         let path = gesture.path;
         if gesture.baseline.as_ref() == Some(&path)
             && self
@@ -945,7 +1135,78 @@ impl Workspace {
         );
     }
 
+    pub(super) fn finish_path_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let draft = self.path_gesture.take().map(|gesture| gesture.path);
+        let path = draft
+            .as_ref()
+            .map(|path| path.id)
+            .or_else(|| self.path_hold.as_ref().map(|path| path.id))
+            .or_else(|| self.displayed_active_path());
+        let Some(path) = path else {
+            self.end_path_session(cx);
+            return;
+        };
+        let Some(tab) = self.active_tab() else { return };
+        let finish = PendingPathFinish {
+            generation: tab.history.generation(),
+            layer: tab.active_layer,
+            tool: self.preferences.tool,
+            path,
+        };
+        let id = tab.id;
+        if tab.editing {
+            self.end_path_session(cx);
+            self.tabs[self.active.unwrap()].pending_path_finish = Some(finish);
+            return;
+        }
+        // Path metadata changes need no pixel rendering. Publish synchronously
+        // through ordinary history, including while an immutable save is running.
+        let mut content = tab.document.content.clone();
+        let placed = draft.is_some_and(|path| content.upsert_path(path));
+        finish.apply(&mut content);
+        self.end_path_session(cx);
+        if placed {
+            let tab = self.active_tab().unwrap();
+            let patch = crate::document::RenderedCanvas::prepare_patch(
+                &tab.document.canvas.pixels,
+                tab.document.canvas.preview.has_transparency,
+                tab.document.canvas.level_caches(),
+                &content,
+                Dirty::Unpainted,
+            )
+            .unwrap();
+            let result = Some((content, tab.active_layer, tab.selection.clone(), patch));
+            self.publish_change(
+                id,
+                finish.generation,
+                super::Change::Edit,
+                result,
+                window,
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
     pub(super) fn end_path_session(&mut self, cx: &mut Context<Self>) {
+        // Escape ends an open path without closing it. A late anchor commit
+        // must not reselect it, even if the user already returned to Path.
+        let path = self
+            .path_hold
+            .as_ref()
+            .map(|path| path.id)
+            .or_else(|| self.displayed_active_path());
+        if let Some(index) = self.active
+            && self.tabs[index].editing
+            && let Some(path) = path
+        {
+            self.tabs[index].pending_path_finish = Some(PendingPathFinish {
+                generation: self.tabs[index].history.generation(),
+                layer: self.tabs[index].active_layer,
+                tool: self.preferences.tool,
+                path,
+            });
+        }
         let gesture = self.path_gesture.take().is_some();
         let hold = self.path_hold.take().is_some();
         let selection = self.path_selection.take().is_some();
@@ -980,44 +1241,6 @@ impl Workspace {
         self.path_gesture = None;
         self.path_hold = None;
         self.path_selection = None;
-    }
-
-    pub(super) fn close_active_path(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(mut gesture) = self.path_gesture.take() {
-            if gesture.path.anchors.len() < 3 {
-                self.path_gesture = Some(gesture);
-                return;
-            }
-            gesture.path.closed = true;
-            let path = gesture.path;
-            self.path_hold = Some(path.clone());
-            self.edit_content(
-                move |content, _, _| {
-                    if content.upsert_path(path) {
-                        Dirty::Unpainted
-                    } else {
-                        Dirty::None
-                    }
-                },
-                window,
-                cx,
-            );
-            return;
-        }
-        let Some(id) = self.displayed_active_path() else {
-            return;
-        };
-        self.edit_content(
-            move |content, _, _| {
-                if content.close_path(id) {
-                    Dirty::Unpainted
-                } else {
-                    Dirty::None
-                }
-            },
-            window,
-            cx,
-        );
     }
 
     pub(super) fn delete_path_anchor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1143,67 +1366,493 @@ impl Workspace {
         f64::from(HIT_PIXELS) * width / screen
     }
 
+    pub(super) fn path_control_hit(&self, position: Point<Pixels>, scale: f32) -> bool {
+        self.path_target(position, scale).is_some()
+    }
+
     fn path_target(&self, position: Point<Pixels>, scale: f32) -> Option<Target> {
         let tab = self.active_tab()?;
-        let geometry = PreviewGeometry::for_tab(tab, self.viewport.get(), scale)?;
-        let (width, height) = tab.document.content.size();
-        if width == 0 || height == 0 {
-            return None;
+        Target::nearest(
+            tab.document.content.paths(),
+            tab.document.content.active_path_id(),
+            self.path_selection.as_ref(),
+            self.canvas_point(position, scale)?,
+            self.path_hit_radius(scale),
+        )
+    }
+}
+
+#[cfg(test)]
+mod session_finish_tests {
+    use super::*;
+    use crate::document::{DocumentContent, RenderedCanvas};
+    use crate::paths::AnchorId;
+
+    fn path(count: u64) -> VectorPath {
+        VectorPath {
+            id: PathId(1),
+            visible: true,
+            closed: false,
+            anchors: (0..count)
+                .map(|index| {
+                    Anchor::corner(
+                        AnchorId(index + 1),
+                        (2. + index as f64 * 3., if index == 1 { 12. } else { 2. }),
+                    )
+                })
+                .collect(),
         }
-        let paths: Vec<_> = tab
-            .document
-            .content
-            .paths()
-            .iter()
-            .filter(|path| path.visible)
-            .cloned()
-            .collect();
-        let active = tab.document.content.active_path_id();
-        let paths = paths.as_slice();
-        let mut ordered: Vec<&VectorPath> = paths
-            .iter()
-            .filter(|path| Some(path.id) == active)
-            .collect();
-        ordered.extend(paths.iter().filter(|path| Some(path.id) != active));
-        let near = |at: (f64, f64)| -> bool {
-            let projected = geometry.project(point(
-                (at.0 / f64::from(width)) as f32,
-                (at.1 / f64::from(height)) as f32,
-            ));
-            let dx = f32::from(projected.x - position.x);
-            let dy = f32::from(projected.y - position.y);
-            dx * dx + dy * dy <= HIT_PIXELS * HIT_PIXELS
+    }
+
+    fn prepared(tab: &super::super::Tab, content: DocumentContent) -> super::super::PreparedChange {
+        let patch = RenderedCanvas::prepare_patch(
+            &tab.document.canvas.pixels,
+            tab.document.canvas.preview.has_transparency,
+            tab.document.canvas.level_caches(),
+            &content,
+            Dirty::Unpainted,
+        )
+        .unwrap();
+        (content, tab.active_layer, tab.selection.clone(), patch)
+    }
+
+    #[test]
+    fn tool_departure_finishes_late_anchor_commit_and_keeps_one_undo_step() {
+        let mut tab = super::super::preview_handoff_tests::tab();
+        tab.document.content.upsert_path(path(2));
+        let pixels = tab.document.canvas.pixels.clone();
+        let mut content = tab.document.content.clone();
+        content.upsert_path(path(3));
+        let result = prepared(&tab, content);
+        tab.pending_path_finish = Some(PendingPathFinish {
+            generation: 0,
+            layer: tab.active_layer,
+            tool: crate::commands::Tool::Brush,
+            path: PathId(1),
+        });
+        tab.document.content.clear_active_path();
+        // The intent survives even if the user returns to Path before publication.
+        assert!(
+            tab.publish_change(0, super::super::Change::Edit, Some(result), 1)
+                .0
+        );
+        assert_eq!(tab.document.content.paths()[0], path(3));
+        assert_eq!(tab.document.content.paths()[0].anchors.len(), 3);
+        assert!(tab.document.content.active_path().is_none());
+        assert!(tab.pending_path_finish.is_none());
+        assert!(std::sync::Arc::ptr_eq(&pixels, &tab.document.canvas.pixels));
+        assert!(tab.history.is_dirty());
+        let state = tab.state();
+        let undone = tab.history.undo(state, 2).unwrap();
+        assert_eq!(undone.content.paths()[0].anchors.len(), 2);
+        assert!(!undone.content.paths()[0].closed);
+    }
+
+    #[test]
+    fn path_finishing_preserves_open_closed_noop_and_stale_states() {
+        for (count, closed) in [(1, false), (2, false), (3, false), (3, true), (8, false)] {
+            let mut tab = super::super::preview_handoff_tests::tab();
+            let mut original = path(count);
+            original.closed = closed;
+            tab.document.content.upsert_path(original.clone());
+            let finish = PendingPathFinish {
+                generation: 0,
+                layer: tab.active_layer,
+                tool: crate::commands::Tool::Move,
+                path: PathId(1),
+            };
+            let mut content = tab.document.content.clone();
+            finish.apply(&mut content);
+            assert_eq!(content.paths()[0], original);
+            assert!(content.active_path().is_none());
+            // A no-op completion must not create a new edit or close any shape.
+            tab.pending_path_finish = Some(finish);
+            tab.document.content.clear_active_path();
+            assert!(!tab.publish_change(0, super::super::Change::Edit, None, 1).0);
+            assert_eq!(tab.document.content.paths()[0], original);
+            assert_eq!(tab.history.generation(), 0);
+            assert!(tab.document.content.active_path().is_none());
+            // A real late anchor commit must retain exactly the incoming geometry.
+            let mut incoming = tab.document.content.clone();
+            incoming.select_path(PathId(1));
+            let result = prepared(&tab, incoming);
+            tab.pending_path_finish = Some(finish);
+            tab.editing = true;
+            assert!(
+                tab.publish_change(0, super::super::Change::Edit, Some(result), 1)
+                    .0
+            );
+            assert_eq!(tab.document.content.paths()[0], original);
+            assert!(tab.document.content.active_path().is_none());
+        }
+        let mut tab = super::super::preview_handoff_tests::tab();
+        tab.document.content.upsert_path(path(3));
+        tab.pending_path_finish = Some(PendingPathFinish {
+            generation: 0,
+            layer: tab.active_layer,
+            tool: crate::commands::Tool::Move,
+            path: PathId(1),
+        });
+        let result = prepared(&tab, tab.document.content.clone());
+        tab.history.commit(tab.state(), 1, true);
+        assert!(
+            !tab.publish_change(0, super::super::Change::Edit, Some(result), 2)
+                .0
+        );
+        assert_eq!(tab.document.content.paths()[0], path(3));
+        assert_eq!(tab.document.content.active_path_id(), Some(PathId(1)));
+        assert!(tab.pending_path_finish.is_none());
+        // Explicit closure remains available and is preserved by finishing.
+        let mut closed = path(3);
+        closed.closed = true;
+        assert!(tab.document.content.upsert_path(closed));
+        let finish = PendingPathFinish {
+            generation: 1,
+            layer: tab.active_layer,
+            tool: crate::commands::Tool::Move,
+            path: PathId(1),
         };
-        for path in &ordered {
-            for anchor in &path.anchors {
-                if anchor.handle_in != anchor.point && near(anchor.handle_in) {
-                    return Some(Target::Handle {
-                        path: path.id,
-                        anchor: anchor.id,
-                        incoming: true,
-                        at: anchor.handle_in,
-                    });
+        finish.apply(&mut tab.document.content);
+        assert!(tab.document.content.paths()[0].closed);
+    }
+    #[test]
+    fn first_drag_moves_middle_node_despite_nearby_handles() {
+        let mut original = path(3);
+        let center = original.anchors[1].point;
+        original.anchors[0].handle_out = (center.0 - 1., center.1);
+        original.anchors[1].handle_in = (center.0 - 2., center.1);
+        original.anchors[1].handle_out = (center.0 + 2., center.1);
+        // A different selected node or no active path must not consume the first drag.
+        for active in [None, Some(original.id)] {
+            let target =
+                Target::nearest(std::slice::from_ref(&original), active, None, center, 8.).unwrap();
+            assert_eq!(
+                target,
+                Target::Anchor {
+                    path: original.id,
+                    anchor: AnchorId(2)
                 }
-                if anchor.handle_out != anchor.point && near(anchor.handle_out) {
-                    return Some(Target::Handle {
-                        path: path.id,
-                        anchor: anchor.id,
-                        incoming: false,
-                        at: anchor.handle_out,
-                    });
-                }
-            }
+            );
+            let mut selection = Some(AnchorSelection::single(original.id, AnchorId(3)));
+            AnchorSelection::click(&mut selection, original.id, AnchorId(2), false);
+            let mut gesture = PathGesture::for_target(
+                original.clone(),
+                target,
+                selection.as_ref().unwrap(),
+                center,
+                gpui::Modifiers::none(),
+                3.,
+                HandleMode::Independent,
+            );
+            gesture.update((center.0 + 1., center.1 + 2.));
+            gesture.close_on_click();
+            let mut expected = original.clone();
+            expected.move_anchors_from(&[original.anchors[1]], (1., 2.));
+            assert_eq!(gesture.path, expected);
         }
-        for path in &ordered {
-            for anchor in &path.anchors {
-                if near(anchor.point) {
-                    return Some(Target::Anchor {
-                        path: path.id,
-                        anchor: anchor.id,
-                    });
-                }
-            }
+        // A selected handle outside the node square remains reachable within its hit radius.
+        original.anchors[1].handle_out = (center.0 + 6., center.1);
+        assert!(matches!(
+            Target::nearest(
+                std::slice::from_ref(&original),
+                Some(original.id),
+                Some(&AnchorSelection::single(original.id, AnchorId(2))),
+                original.anchors[1].handle_out,
+                8.
+            ),
+            Some(Target::Handle {
+                anchor: AnchorId(2),
+                incoming: false,
+                ..
+            })
+        ));
+        original.anchors[0].handle_out = center;
+        assert_eq!(
+            Target::nearest(std::slice::from_ref(&original), None, None, center, 8.),
+            Some(Target::Anchor {
+                path: original.id,
+                anchor: AnchorId(2)
+            })
+        );
+        original.visible = false;
+        assert!(Target::nearest(&[original], None, None, center, 8.).is_none());
+    }
+
+    #[test]
+    fn only_platform_edit_modifier_closes_or_shapes_handles() {
+        let original = path(3);
+        let start = original.anchors[0].point;
+        let target = Target::Anchor {
+            path: original.id,
+            anchor: AnchorId(1),
+        };
+        let selection = AnchorSelection::single(original.id, AnchorId(1));
+        for control in [false, true] {
+            let mut gesture = PathGesture::for_target(
+                original.clone(),
+                target,
+                &selection,
+                start,
+                if control {
+                    gpui::Modifiers::secondary_key()
+                } else {
+                    gpui::Modifiers::none()
+                },
+                3.,
+                HandleMode::Independent,
+            );
+            gesture.update(start);
+            gesture.close_on_click();
+            assert_eq!(gesture.path.closed, control);
+            assert_eq!(gesture.path.anchors, original.anchors);
         }
-        None
+        let mut gesture = PathGesture::for_target(
+            original.clone(),
+            target,
+            &selection,
+            start,
+            gpui::Modifiers::none(),
+            3.,
+            HandleMode::Independent,
+        );
+        gesture.update((start.0 + 1., start.1));
+        gesture.close_on_click();
+        assert!(!gesture.path.closed);
+        assert_eq!(gesture.path.anchors[0].point, (start.0 + 1., start.1));
+
+        let mut gesture = PathGesture::for_target(
+            original.clone(),
+            target,
+            &selection,
+            start,
+            gpui::Modifiers::secondary_key(),
+            3.,
+            HandleMode::Independent,
+        );
+        gesture.update((start.0 + 10., start.1 + 5.));
+        gesture.close_on_click();
+        assert!(!gesture.path.closed);
+        assert_eq!(gesture.path.anchors[0].point, start);
+        assert_eq!(
+            gesture.path.anchors[0].handle_out,
+            (start.0 + 10., start.1 + 5.)
+        );
+        assert_eq!(
+            gesture.path.anchors[0].handle_in,
+            (start.0 - 10., start.1 - 5.)
+        );
+        // Returning to the down position after a drag must never turn it into a close click.
+        gesture.update(start);
+        gesture.close_on_click();
+        assert!(!gesture.path.closed);
+        let mut short = PathGesture::for_target(
+            path(2),
+            target,
+            &selection,
+            start,
+            gpui::Modifiers::secondary_key(),
+            3.,
+            HandleMode::Independent,
+        );
+        short.close_on_click();
+        assert!(!short.path.closed);
+    }
+
+    #[test]
+    fn endpoints_resume_in_the_selected_direction_and_groups_move_together() {
+        let original = path(3);
+        for (anchor, expected) in [(1, Some(0)), (2, None), (3, Some(3))] {
+            assert_eq!(
+                continuation_index(
+                    &original,
+                    Some(&AnchorSelection::single(original.id, AnchorId(anchor)))
+                ),
+                expected
+            );
+        }
+        let mut selection = Some(AnchorSelection::single(original.id, AnchorId(1)));
+        AnchorSelection::click(&mut selection, original.id, AnchorId(2), true);
+        assert_eq!(continuation_index(&original, selection.as_ref()), None);
+        AnchorSelection::click(&mut selection, original.id, AnchorId(2), false);
+        let target = Target::Anchor {
+            path: original.id,
+            anchor: AnchorId(2),
+        };
+        let down = original.anchors[1].point;
+        let mut gesture = PathGesture::for_target(
+            original.clone(),
+            target,
+            selection.as_ref().unwrap(),
+            down,
+            gpui::Modifiers::none(),
+            3.,
+            HandleMode::Independent,
+        );
+        gesture.update((down.0 + 4., down.1 + 5.));
+        gesture.close_on_click();
+        let mut expected = original.clone();
+        expected.move_anchors_from(&original.anchors[..2], (4., 5.));
+        assert_eq!(gesture.path, expected);
+        let mut closed = original.clone();
+        closed.closed = true;
+        assert_eq!(continuation_index(&closed, None), None);
+        // Prepending preserves existing geometry and handles, without reversing the curve.
+        let mut extended = original.clone();
+        extended.anchors.insert(
+            continuation_index(
+                &original,
+                Some(&AnchorSelection::single(original.id, AnchorId(1))),
+            )
+            .unwrap(),
+            Anchor::corner(AnchorId(4), (0., 0.)),
+        );
+        assert_eq!(&extended.anchors[1..], original.anchors.as_slice());
+    }
+    #[test]
+    fn node_square_wins_off_center_at_every_zoom_and_shift_toggles_it() {
+        for units_per_point in [0.25, 1., 4., 32.] {
+            let mut original = path(3);
+            original.anchors = vec![
+                Anchor::corner(AnchorId(1), (0., 0.)),
+                Anchor::corner(AnchorId(2), (40. * units_per_point, 40. * units_per_point)),
+                Anchor::corner(AnchorId(3), (80. * units_per_point, 0.)),
+            ];
+            let center = original.anchors[1].point;
+            original.anchors[1].handle_in = (center.0 - 2. * units_per_point, center.1);
+            original.anchors[1].handle_out = (center.0 + 2. * units_per_point, center.1);
+            let mut selection = Some(AnchorSelection::single(original.id, AnchorId(2)));
+            // These positions used to pick the short handles before moving the node.
+            for (x, y) in [(-2., 0.), (2., 0.), (4.4, 4.4), (-4.4, -4.4)] {
+                let down = (
+                    center.0 + x * units_per_point,
+                    center.1 + y * units_per_point,
+                );
+                let target = Target::nearest(
+                    std::slice::from_ref(&original),
+                    Some(original.id),
+                    selection.as_ref(),
+                    down,
+                    8. * units_per_point,
+                )
+                .unwrap();
+                assert_eq!(
+                    target,
+                    Target::Anchor {
+                        path: original.id,
+                        anchor: AnchorId(2)
+                    }
+                );
+                let mut gesture = PathGesture::for_target(
+                    original.clone(),
+                    target,
+                    selection.as_ref().unwrap(),
+                    down,
+                    gpui::Modifiers::none(),
+                    3. * units_per_point,
+                    HandleMode::Independent,
+                );
+                gesture.update((down.0 + 10. * units_per_point, down.1));
+                let mut expected = original.clone();
+                expected.move_anchors_from(&[original.anchors[1]], (10. * units_per_point, 0.));
+                assert_eq!(gesture.path, expected);
+            }
+            // Shift-click reaches the node even where its short handle is painted.
+            for _ in 0..2 {
+                let target = Target::nearest(
+                    std::slice::from_ref(&original),
+                    Some(original.id),
+                    selection.as_ref(),
+                    original.anchors[1].handle_out,
+                    8. * units_per_point,
+                )
+                .unwrap();
+                let Target::Anchor { path, anchor } = target else {
+                    panic!("handle stole Shift-click")
+                };
+                AnchorSelection::click(&mut selection, path, anchor, true);
+            }
+            assert_eq!(
+                selection,
+                Some(AnchorSelection::single(original.id, AnchorId(2)))
+            );
+            // Hidden handles are neither painted nor interactive.
+            original.anchors[0].handle_out = (160. * units_per_point, 160. * units_per_point);
+            assert!(
+                Target::nearest(
+                    std::slice::from_ref(&original),
+                    Some(original.id),
+                    selection.as_ref(),
+                    original.anchors[0].handle_out,
+                    8. * units_per_point
+                )
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn platform_edit_click_closes_through_an_overlapping_handle() {
+        let mut original = path(3);
+        original.anchors[0].handle_out = (3., 2.);
+        let selection = AnchorSelection::single(original.id, AnchorId(1));
+        let down = original.anchors[0].handle_out;
+        let target = Target::nearest(
+            std::slice::from_ref(&original),
+            Some(original.id),
+            Some(&selection),
+            down,
+            8.,
+        )
+        .unwrap();
+        // Real GPUI modifiers: Command on macOS, Control on Windows/Linux.
+        let mut gesture = PathGesture::for_target(
+            original,
+            target,
+            &selection,
+            down,
+            gpui::Modifiers::secondary_key(),
+            3.,
+            HandleMode::Independent,
+        );
+        gesture.update(down);
+        gesture.close_on_click();
+        assert!(gesture.path.closed);
+    }
+    #[test]
+    fn hidden_selected_path_is_excluded_from_canvas_continuation() {
+        let mut tab = super::super::preview_handoff_tests::tab();
+        let original = path(3);
+        tab.document.content.upsert_path(original.clone());
+        let selection = AnchorSelection::single(original.id, AnchorId(3));
+        assert_eq!(continuation_path(&tab.document.content), Some(&original));
+        assert!(tab.document.content.set_path_visible(original.id, false));
+        assert_eq!(tab.document.content.active_path_id(), Some(original.id));
+        // Both hiding the current path and explicitly selecting a hidden row
+        // must take the new-visible-path branch when clicking empty canvas.
+        for reselect in [false, true] {
+            if reselect {
+                tab.document.content.select_path(original.id);
+            }
+            assert!(continuation_path(&tab.document.content).is_none());
+            let hidden = tab.document.content.active_path().unwrap();
+            assert!(continuation_index(hidden, None).is_none());
+            assert!(continuation_index(hidden, Some(&selection)).is_none());
+            assert_eq!(hidden.anchors, original.anchors);
+            assert!(
+                Target::nearest(
+                    tab.document.content.paths(),
+                    Some(original.id),
+                    Some(&selection),
+                    original.anchors[2].point,
+                    8.
+                )
+                .is_none()
+            );
+        }
+        // Showing the path again restores explicit endpoint continuation.
+        tab.document.content.set_path_visible(original.id, true);
+        let shown = continuation_path(&tab.document.content).unwrap();
+        assert_eq!(shown, &original);
+        assert_eq!(continuation_index(shown, Some(&selection)), Some(3));
     }
 }

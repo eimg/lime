@@ -93,7 +93,7 @@ actions!(
         SelectionToPath,
         AlphaToSelection,
         TextAlongPath,
-        ClosePath,
+        FinishPath,
         CancelPath,
         DeletePathAnchor,
         StrokePath,
@@ -209,7 +209,7 @@ impl Tool {
             Self::Select => (
                 "Select",
                 "select",
-                "Drag a rectangle. Shift adds, Control subtracts, and Shift-Control intersects.",
+                "Drag a rectangle. Shift adds, Cmd/Ctrl subtracts, and Shift+Cmd/Ctrl intersects (Command on macOS, Ctrl elsewhere).",
             ),
             Self::OvalSelect => (
                 "Oval Select",
@@ -234,7 +234,7 @@ impl Tool {
             Self::Brush => (
                 "Brush",
                 "brush",
-                "Paint a soft stroke. Shift-click continues from the last point.",
+                "Paint a soft stroke. Hold Shift to preview a line from the last point; click to paint it.",
             ),
             Self::Eraser => (
                 "Eraser",
@@ -274,7 +274,7 @@ impl Tool {
             Self::Path => (
                 "Path",
                 "path",
-                "Click to add anchors and drag for handles. Click the first anchor to close.",
+                "Click to add anchors; drag nodes to move them. Enter finishes; Cmd/Ctrl-click the first node closes.",
             ),
         };
         ToolInfo {
@@ -315,28 +315,28 @@ impl Tool {
                 "Drag a border or corner to preview scaling the active layer. Apply or Return on the canvas commits all adjustments as one undo step; Cancel or Escape on the canvas discards them. Both dismiss the frame and editing controls. Click the canvas or select Scale Layer again to start another preview. Type Width or Height for a live preview about the selected Size anchor (Center initially); Return or leaving the field finishes that field, and Escape or empty text restores its previous size. Fit Layer to Canvas previews a proportional fit and centers the whole layer, even when handles are off-screen. It may enlarge smaller layers and uses the selected resampling. The Size anchor affects typed dimensions; handle drags keep their opposite edge or corner. Lock aspect ratio links dimensions; Shift temporarily reverses the lock while dragging. Choose the resampling used at Apply. Rasterize editable text before scaling it."
             }
             Self::Select => {
-                "Drag a rectangle. Drag inside to move it or drag a handle to resize it; click outside to deselect. X, Y, Width, Height, and corner radius update immediately; empty text or Escape restores the numeric edit. Choose Free or a fixed aspect ratio; Choosing a fixed ratio or editing Ratio W/H refits the current editable selection around its center. Free releases the constraint without changing its shape. Antialias edges smooths rounded corners. Shift adds, Control subtracts, and Shift-Control intersects."
+                "Drag a rectangle. Drag inside to move it or drag a handle to resize it; click outside to deselect. Combined masks can be moved by dragging a selected area; holes and soft edges stay intact. X, Y, Width, Height, and corner radius update immediately; empty text or Escape restores the numeric edit. Choose Free or a fixed aspect ratio; Choosing a fixed ratio or editing Ratio W/H refits the current editable selection around its center. Free releases the constraint without changing its shape. Antialias edges smooths rounded corners. Shift adds, Cmd/Ctrl subtracts, and Shift+Cmd/Ctrl intersects (Command on macOS, Ctrl elsewhere). The existing outline stays visible while combining."
             }
             Self::OvalSelect => {
-                "Drag an oval; choose 1:1 for a circle, or another fixed aspect ratio. Choosing a fixed ratio or editing Ratio W/H refits the current editable selection around its center. Free releases the constraint without changing its shape. Drag inside to move it or drag a handle to resize it; click outside to deselect. X, Y, Width, and Height update immediately; empty text or Escape restores the numeric edit. Antialias edges smooths the curve. Shift adds, Control subtracts, and Shift-Control intersects."
+                "Drag an oval; choose 1:1 for a circle, or another fixed aspect ratio. Choosing a fixed ratio or editing Ratio W/H refits the current editable selection around its center. Free releases the constraint without changing its shape. Drag inside to move it or drag a handle to resize it; click outside to deselect. Combined masks can be moved by dragging a selected area; holes and soft edges stay intact. X, Y, Width, and Height update immediately; empty text or Escape restores the numeric edit. Antialias edges smooths the curve. Shift adds, Cmd/Ctrl subtracts, and Shift+Cmd/Ctrl intersects (Command on macOS, Ctrl elsewhere). The existing outline stays visible while combining."
             }
             Self::FreeSelect => {
-                "Click to add vertices or drag to draw a freehand segment. Releasing keeps the outline open. Click its start or press Return to close it; Escape cancels. Shift adds, Control subtracts, and Shift-Control intersects."
+                "Click to add vertices or drag to draw a freehand segment. Releasing keeps the outline open. Click its start or press Return to close it; Escape cancels. Shift adds, Cmd/Ctrl subtracts, and Shift+Cmd/Ctrl intersects (Command on macOS, Ctrl elsewhere). The existing outline stays visible while combining."
             }
             Self::MagicWand => {
-                "Click a connected region to select it. Sample All Layers uses the visible composite; otherwise only the active layer is sampled. Tolerance is remembered independently of Bucket Fill; zero matches exactly, ignoring stored RGB when both pixels are fully transparent. Gap radius (0–8 image pixels) closes small breaks in boundaries without editing the artwork; 0 turns it off. Larger values may also seal narrow passages. Antialias edges optionally smooths the completed contour without spreading the flood; it starts off and affects new selections only. Straight boundaries stay sharp, while corners receive partial coverage. Gap barriers remain excluded. New-selection feathering follows antialiasing. Shift adds, Control subtracts, and Shift-Control intersects."
+                "Click a connected region to select it. Sample All Layers uses the visible composite; otherwise only the active layer is sampled. Tolerance is remembered independently of Bucket Fill; zero matches exactly, ignoring stored RGB when both pixels are fully transparent. Gap radius (0–8 image pixels) closes small breaks in boundaries without editing the artwork; 0 turns it off. Larger values may also seal narrow passages. Antialias edges optionally smooths the completed contour without spreading the flood; it starts off and affects new selections only. Straight boundaries stay sharp, while corners receive partial coverage. Gap barriers remain excluded. New-selection feathering follows antialiasing. Shift adds, Cmd/Ctrl subtracts, and Shift+Cmd/Ctrl intersects (Command on macOS, Ctrl elsewhere). The existing outline stays visible while combining."
             }
             Self::Pencil | Self::Brush => {
-                "Paint with the foreground color inside the selection. Opacity limits each stroke; overlapping dabs do not exceed it. Buildup uses Flow per dab to approach that limit; new strokes compound. Release commits one stroke; Escape cancels. Shift-click continues from the last stroke endpoint. The bracket keys [ and ] change the brush size. Pencil has a hard edge and stays unsmoothed. Brush uses the chosen hardness and offers Off/Light/Strong smoothing. Smoothing catches up when you stop and reaches the exact endpoint on release."
+                "Paint with the foreground color inside the selection. Opacity limits each stroke; overlapping dabs do not exceed it. Buildup uses Flow per dab to approach that limit; new strokes compound. Release commits one stroke; Escape cancels. Hold Shift to preview a straight line from the last stroke endpoint; click to paint it. The bracket keys [ and ] change the brush size. Pencil has a hard edge and stays unsmoothed. Brush uses the chosen hardness and offers Off/Light/Strong smoothing. Smoothing catches up when you stop and reaches the exact endpoint on release."
             }
             Self::Eraser => {
-                "Paint to erase to transparency inside the selection. Opacity limits how much each stroke removes. Buildup uses Flow per dab to approach that limit; new strokes remove more. Release commits one stroke; Escape cancels. Shift-click continues from the last stroke endpoint. Off/Light/Strong smoothing steadies the trace, catches up when you stop, and reaches the exact endpoint on release. Each tool remembers its setting. The bracket keys [ and ] change the brush size."
+                "Paint to erase to transparency inside the selection. Opacity limits how much each stroke removes. Buildup uses Flow per dab to approach that limit; new strokes remove more. Release commits one stroke; Escape cancels. Hold Shift to preview a straight line from the last stroke endpoint; click to paint it. Off/Light/Strong smoothing steadies the trace, catches up when you stop, and reaches the exact endpoint on release. Each tool remembers its setting. The bracket keys [ and ] change the brush size."
             }
             Self::Blur | Self::Sharpen => {
-                "Paint to change local detail on the active layer, inside the selection. Strength limits each stroke's effect, using the pixels at its start. Buildup uses Flow per dab to approach that strength; release and paint again for another pass. Release commits one stroke; Escape cancels. Shift-click continues from the last stroke endpoint. Off/Light/Strong smoothing steadies the trace, catches up when you stop, and reaches the exact endpoint on release. Each tool remembers its setting. The bracket keys [ and ] change the brush size."
+                "Paint to change local detail on the active layer, inside the selection. Strength limits each stroke's effect, using the pixels at its start. Buildup uses Flow per dab to approach that strength; release and paint again for another pass. Release commits one stroke; Escape cancels. Hold Shift to preview a straight line from the last stroke endpoint; click to paint it. Off/Light/Strong smoothing steadies the trace, catches up when you stop, and reaches the exact endpoint on release. Each tool remembers its setting. The bracket keys [ and ] change the brush size."
             }
             Self::CloneStamp => {
-                "Alt-click to set the source. Sample All Layers reads the visible canvas instead of only the active layer, using its pixels at the start of each stroke. Changing sampling requires a new source. Show Source displays the sampled position and brush footprint. Aligned keeps the offset across strokes; turn it off to restart each stroke at the source. Changing alignment resets the offset. Choose a new source after tab/layer or layer/canvas geometry changes. The selection limits the destination. Opacity limits each stroke; Buildup uses Flow per dab to approach it. Release commits one stroke; Escape cancels. Off/Light/Strong smoothing steadies the trace, catches up when you stop, and reaches the exact endpoint on release. Each tool remembers its setting. The bracket keys [ and ] change the brush size."
+                "Alt-click to set the source. Sample All Layers reads the visible canvas instead of only the active layer, using its pixels at the start of each stroke. Changing sampling requires a new source. Show Source displays the sampled position and brush footprint. Aligned keeps the offset across strokes; turn it off to restart each stroke at the source. Changing alignment resets the offset. Choose a new source after tab/layer or layer/canvas geometry changes. The selection limits the destination. Hold Shift to preview a straight line from the last stroke endpoint; click to paint it. Opacity limits each stroke; Buildup uses Flow per dab to approach it. Release commits one stroke; Escape cancels. Off/Light/Strong smoothing steadies the trace, catches up when you stop, and reaches the exact endpoint on release. Each tool remembers its setting. The bracket keys [ and ] change the brush size."
             }
             Self::BucketFill => {
                 "Click to fill with the foreground color. Connected fills a connected region; Selection covers the whole selection. Sample All Layers reads visible layers to find the region, then paints only the active layer. Tolerance 0 matches exactly, ignoring stored RGB when both pixels are fully transparent. Tolerance and Gap radius are remembered independently of Wand. Gap radius (0–8 image pixels) closes small breaks without editing boundary pixels; 0 turns it off, and larger values may seal narrow passages. Matching and sampling controls apply only to Connected mode."
@@ -348,7 +348,7 @@ impl Tool {
                 "Click empty canvas to add text above all layers, regardless of the selected layer, or click a text layer to edit it in place. Drag, Shift-click, or Shift+arrows select a range; Copy/Cut use it and typing/Paste replace it. Option+Left/Right and Option+Backspace/Delete on macOS (Ctrl on Windows) work by word; Shift extends the selection. Return adds a line. Font/style controls affect the whole layer. In the font picker, type to filter; arrows browse, Return chooses, and Escape closes it. Outside the picker, Escape, Cmd/Ctrl-Enter, clicking outside, or changing tools/layers/tabs commits. Undo steps through typing first. Select → Alpha to Selection selects the letter shapes. With a guide selected in Paths, Layer → Text Along Path… previews one line and creates a raster result while hiding the original text. Undo to edit and retry. Rasterize Text enables pixel tools."
             }
             Self::Path => {
-                "Click to add anchors; drag to pull their handles. Alt-click a curve to insert an anchor without changing its shape; drag it to reposition the new point. Anchor and handle hits take priority. Shift-click anchors to add/remove them from a selection on one path; then drag any selected anchor to move the group and its handles. All Anchors and Deselect are in Tool Options. Clicking an unselected anchor selects only it. Click the first anchor, selected alone, to close the path. Corner (collapse handles), Smooth (align/create handles), and Delete/Backspace apply to the selected group in one undo step; with no selection, Delete removes the last anchor. Handle Drag uses Independent, Aligned (keep the opposite length), or Symmetric (mirror both direction and length); it changes future handle drags. Escape or changing tools ends the current path; the next click starts a new one. Use the Paths tab to select, show, hide, delete, convert, or stroke paths. The panel Stroke uses the foreground color and shared stroke settings. Edit → Stroke Path… or Stroke Selection… opens those settings. A path stroke needs a visible path and a paintable raster layer."
+                "Click empty canvas to place anchors; drag a new anchor to pull its handles. Drag a node square to move it immediately. Only selected nodes show handles; drag those handles to bend the curve. Cmd means Command on macOS; use Ctrl on Windows/Linux. Cmd/Ctrl-drag a node to pull symmetric handles without moving it. Cmd/Ctrl-click (or Alt/Option-click) a curve to insert an anchor without changing its shape; continue dragging to move the new node. Shift-click nodes to add/remove them from a selection on one path; drag a selected node to move the group. All Anchors and Deselect are in Tool Options. Enter or switching tools finishes editing without closing the path; the next empty-canvas click starts a new path. Click a node to edit an existing path; select either endpoint to continue from that end. Interior nodes cannot extend the path. Hidden paths are not extended; clicking empty canvas starts a visible path. Cmd/Ctrl-click the first node to close an outline. Escape ends editing without closing and discards an unfinished drag. Corner collapses handles; Smooth aligns or creates them. Delete/Backspace deletes selected nodes, or the last node when none are selected. Handle Drag uses Independent, Aligned (keep the opposite length), or Symmetric (mirror direction and length). Use Paths to select, show, hide, delete, convert, or stroke paths. The panel Stroke uses the foreground color and shared stroke settings. Edit → Stroke Path… or Stroke Selection… opens those settings. A path stroke needs a visible path and a paintable raster layer."
             }
         }
     }
@@ -589,7 +589,7 @@ fn workspace_bindings(primary: &str) -> Vec<KeyBinding> {
         KeyBinding::new("[", BrushSizeDown, None),
         KeyBinding::new("]", BrushSizeUp, None),
         KeyBinding::new("escape", CancelPath, Some("Path")),
-        KeyBinding::new("enter", ClosePath, Some("Path")),
+        KeyBinding::new("enter", FinishPath, Some("Path")),
         KeyBinding::new("backspace", DeletePathAnchor, Some("Path")),
         KeyBinding::new("delete", DeletePathAnchor, Some("Path")),
         // Let the text key handler delete characters before canvas clearing.
@@ -1062,7 +1062,7 @@ mod tests {
                     .chain(sidebar_button_bindings())
                     .collect(),
             );
-            for tool in ["Crop", "ScaleLayer", "Transform", "Gradient"] {
+            for tool in ["Crop", "ScaleLayer", "Transform", "Gradient", "Path"] {
                 let canvas = KeyContext::parse(tool).unwrap();
                 let (matches, _) = keymap.bindings_for_input(
                     &[Keystroke::parse("enter").unwrap()],
@@ -1084,6 +1084,20 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn path_enter_finishes_the_session() {
+        use gpui::{KeyContext, Keymap, Keystroke};
+        for primary in ["cmd", "ctrl"] {
+            let keymap = Keymap::new(workspace_bindings(primary));
+            let (matches, pending) = keymap.bindings_for_input(
+                &[Keystroke::parse("enter").unwrap()],
+                &[KeyContext::parse("Path").unwrap()],
+            );
+            assert!(!pending);
+            assert!(matches[0].action().as_any().is::<FinishPath>());
         }
     }
 

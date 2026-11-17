@@ -615,18 +615,6 @@ impl DocumentContent {
         true
     }
 
-    pub fn close_path(&mut self, id: crate::paths::PathId) -> bool {
-        let Some(path) = self.paths.iter_mut().find(|path| path.id == id) else {
-            return false;
-        };
-        if path.closed || path.anchors.len() < 3 {
-            return false;
-        }
-        path.closed = true;
-        self.active_path = Some(id);
-        true
-    }
-
     pub fn delete_anchors(
         &mut self,
         path_id: crate::paths::PathId,

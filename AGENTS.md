@@ -14,7 +14,8 @@ inspector shares the toolbox's 56-point folded width. Three permanent groups sho
 essential editable tool controls at the top, layer thumbnails in the largest
 middle group, and unnumbered path blocks with visibility eyes below. Layers and
 Paths use short text-only headers. Click a path block's empty area to select it;
-its eye toggles visibility independently. Each group
+its eye toggles visibility independently. Selected paths use the same accent border
+and selected background as layers in both inspector layouts. Each group
 scrolls independently without visible scrollbars, with subtle overflow fades;
 headers remain fixed. Compact options omit Apply/Cancel; existing Return/Escape
 bindings apply/cancel previews after finishing any inline numeric edit. Move
@@ -209,7 +210,16 @@ bounded to canvas pixels and clipped curves retain their original geometry.
 New geometric selections use the persistent radius/antialias defaults rather
 than copying style from an existing selection at gesture start. Moving/resizing
 an existing shape still preserves its own quality and coverage.
-Shift adds to the selection, Control subtracts, and Shift-Control intersects.
+Shift adds to the selection, Cmd/Ctrl subtracts, and Shift+Cmd/Ctrl intersects
+(Command on macOS, Ctrl on Windows/Linux).
+Geometric add/subtract/intersect drags retain the original selection outline beside
+the incoming shape through the scoped background commit handoff. Compound masks
+can be moved with Rectangle/Oval Select by dragging a covered pixel; holes start
+a new selection instead. Modifier drags still combine. Mask movement stays inside
+the canvas, shifts cached outlines during the gesture, then translates original
+coverage in the selection worker on release without re-feathering. The display
+offset survives the commit handoff but never enters document/history state.
+Complex masks retain their holes and soft coverage and do not acquire resize grips.
 Wand and Bucket have independent persistent Tolerance and Gap radius settings,
 starting at zero. Zero tolerance matches exactly. Gap radius (0–8 image pixels)
 closes small breaks in nonmatching boundaries before four-connected region
@@ -397,7 +407,15 @@ windows of 64/128 ms. A short-lived eight-ms timer catches up when the pointer
 stops, sleeps when settled, and validates a per-stroke token before touching
 live pixels. Off bypasses the filter and timer. Release drains the remaining
 bounded tail synchronously to the exact endpoint before the ordinary single
-stroke commit; cancellation discards it. Shift-click connectors remain straight.
+stroke commit; cancellation discards it. Shift-click connectors remain straight. Holding Shift previews a connector from
+that same committed layer-local endpoint, projected through the current layer
+offset and canvas zoom/pan. The guide is clipped to the canvas, uses live modifiers,
+and hides during strokes, busy edits, invalid paint targets, or clone-source picking.
+Crop, Gradient, and changed Scale/Rotate/Flip/Perspective drafts lead the status
+bar with their pending-preview state. Resting valid drafts explain Enter/Apply
+and Escape/tool-switch discard; numeric edits, pointer drags, invalid transforms,
+and applying edits show the relevant instruction instead. Unchanged transform
+sessions show no pending warning. The full status is available on hover.
 The Clone source indicator uses the filtered destination during a smoothed stroke.
 The paint and retouch tools retain independent brush settings across restarts;
 path and selection outlines share their own settings. Opacity limits each stroke
@@ -484,8 +502,26 @@ stacked layout on narrow windows. Shadows default to black; Choose Color opens t
 color picker and Use Foreground copies the foreground. Canceling the picker
 returns to the unchanged shadow draft. Reset restores built-in parameters and black. Memory is not project data
 and is not undone with the document. Path (`P`) edits cubic anchors in canvas
-coordinates. Click adds an anchor, a drag pulls its handles, and clicking the
-first anchor closes the path. Alt-clicking a visible curve inserts an anchor by exact cubic
+coordinates. Click empty canvas to add an anchor and drag a new anchor to pull
+its handles. Existing nodes move with one ordinary drag, without a selection-only
+first gesture. The full painted node square wins over nearby handles at every zoom; outside
+squares, hit testing chooses the nearest visible control. Only selected nodes on
+the active path show interactive handles. Handles paint before all node squares.
+Path controls take priority over coincident guide grabs, including Shift-click.
+The active path wins equal-distance ties of the same type.
+Cmd/Ctrl-drag on a node pulls symmetric handles without moving its position.
+Command is used on macOS because GPUI maps Control-click to a right-click;
+Windows/Linux use Control.
+Cmd/Ctrl-click on the first node closes an open path with at least three nodes;
+ordinary clicks/drags never close it. Modifier drags remember exceeding a
+three-screen-point threshold, so returning to the start cannot turn a drag into
+closure. Enter and tool departure finish editing without closing; a later empty
+canvas click starts a new path. Selecting either endpoint resumes that end,
+prepending/appending without reversing existing curves. Interior/group selection
+requires selecting an endpoint or finishing before adding another node. Hidden
+paths cannot be continued on canvas, even when selected in Paths; clicking empty
+canvas starts a new visible path and leaves the hidden geometry unchanged.
+Cmd/Ctrl-clicking (or the retained Alt/Option-click alias) on a visible curve inserts an anchor by exact cubic
 subdivision, including closing segments; existing anchor/handle hits take priority.
 The inserted point can be dragged within that same one-step gesture. Hit testing
 uses an eight-screen-point radius, bounded subdivision, and chord-projection/
@@ -498,8 +534,8 @@ anchor has a larger outlined marker. Corner collapses the group's handles; Smoot
 aligns them and preserves existing lengths, initializing missing handles from neighbors.
 Delete/Backspace removes all selected anchors in one metadata edit, or the last
 anchor when none are selected. Removing down to two anchors opens the path;
-removing every anchor removes the path. A group click never closes an open path;
-click-first-anchor closure is retained for a single selected anchor. Selection
+removing every anchor removes the path. Shift-click only changes the group and
+never closes an open path. Selection
 is session-only and clears on path/tab/tool switches, hiding/deleting its path,
 and undo/redo. Stale or hidden IDs cannot target another path.
 Independent (default), Aligned, and Symmetric are persistent handle-drag preferences;
@@ -848,7 +884,13 @@ document is a single plain layer without paths, guides, or editable text.
 - `src/paths.rs` stores cubic paths in canvas coordinates, flattens them, fills
   closed paths with nonzero winding, and builds path outlines from simple and
   mask selections. `src/workspace/path_ui.rs` edits anchors and handles and
-  converts between paths and selections. A drag commits when the pointer is
+  converts between paths and selections. Enter or leaving Path finishes editing and
+  preserves the current open/closed geometry. Closing requires Cmd/Ctrl-clicking the
+  first anchor. A tab/generation-scoped finish intent survives an in-flight anchor commit
+  and prevents its completion from reselecting the old path. Escape ends without
+  closing. Settled path metadata uses the ordinary undo/publication flow without
+  rendering pixels; a following transform session starts after pending completion.
+  A drag commits when the pointer is
   released. Cubic splitting preserves the curve and original anchor IDs, enforces
   limits, and uses finite weighted interpolation. Path rows clear stale anchor
   selection on a successful switch and refuse changes while a tab is busy.
@@ -885,8 +927,8 @@ before combining them, preserving previous coverage and one selection history
 entry. The Magic Wand keeps its own tolerance and gap radius, separate from Bucket Fill. Its optional visible-composite
 source is built in the background and floods in canvas coordinates; active-layer
 sampling maps through the layer offset.
-Fill, Clear, and the clipboard honor feathered coverage. Shift adds, Control
-subtracts, and Shift-Control intersects. Over the box or ellipse the painted
+Fill, Clear, and the clipboard honor feathered coverage. Shift adds, Cmd/Ctrl
+subtracts, and Shift+Cmd/Ctrl intersects. Over the box or ellipse the painted
 crosshair gives way to a hand or resize cursor. The outline is a dashed
 contour. Stroke polylines follow that contour, including a hole. Mask
 transforms avoid per-pixel coordinate lists; feathering uses running sums and

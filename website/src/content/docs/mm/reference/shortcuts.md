@@ -2,8 +2,8 @@
 title: "Keyboard Shortcuts"
 description: "Platform modifier၊ Tools key၊ Canvas action နှင့် Text ရိုက်စဉ် ကွာခြားချက်များ။"
 translationKey: reference/shortcuts
-sourceRevision: "1.2.3-guide-1"
-translatedRevision: "1.2.3-guide-1"
+sourceRevision: "1.2.3-tool-feedback-1"
+translatedRevision: "1.2.3-tool-feedback-1"
 ---
 
 ဤစာမျက်နှာရှိ **Primary** သည် macOS တွင် **Cmd**၊ Windows/Linux တွင် **Ctrl** ကို ဆိုလိုသည်။ Workspace တွင် Focus ရှိမှ Tools ၏ Letter key များကို သုံးနိုင်သည်။ Field သို့မဟုတ် Text Layer တွင် စာရိုက်နေလျှင် ထို Letter များကို Text အဖြစ်သာ ထည့်သည်။
@@ -41,7 +41,7 @@ translatedRevision: "1.2.3-guide-1"
 | Brush သေး / ကြီး | [ / ] |
 | Select All / Select None / Invert Selection | Primary+A / Primary+Shift+A / Primary+Shift+I |
 | ရွေးထားသော Pixel များကို Transparent ဖြစ်အောင် ဖျက်ရန် | Delete / Backspace |
-| Selection ပေါင်း / နုတ် / ထပ်ရာယူ | ရွေးနေစဉ် Shift / Control / Shift+Control |
+| Selection ပေါင်း / နုတ် / ထပ်ရာယူ | ရွေးနေစဉ် Shift / Cmd/Ctrl / Shift+Cmd/Ctrl |
 | Foreground နှင့် Background လဲရန် | X |
 
 Pencil၊ Brush၊ Blur Brush နှင့် Sharpen Brush တွင် Letter key Shortcut မရှိပါ။ Toolbox သို့မဟုတ် Tools Menu မှ ရွေးပါ။ Default Colors တွင် Shortcut မရှိပါ။
@@ -59,7 +59,7 @@ Pencil၊ Brush၊ Blur Brush နှင့် Sharpen Brush တွင် Letter 
 
 ## Focus အလိုက် ကွာခြားချက် {#context}
 
-Canvas ပေါ် Return က Crop/Gradient/Transform Preview ကို Apply လုပ်သည်၊ သို့မဟုတ် Free Select/Path ကို ပိတ်သည်။ Escape က ထို Preview များကို Cancel လုပ်သည်။ Numeric field အတွင်း Return က Field edit ကို အဆုံးသတ်ပြီး Escape က ယခင်တန်ဖိုး ပြန်ထားသည်။
+Canvas ပေါ် Return က Crop/Gradient/Transform Preview ကို Apply လုပ်သည်၊ Free Select ကို ပိတ်သည်၊ သို့မဟုတ် Path ကို မပိတ်ဘဲ ပြင်ဆင်ခြင်းကို အဆုံးသတ်သည်။ Path ပိတ်ရန် ပထမ Node ကို Cmd/Ctrl-click လုပ်ပါ။ Escape က ထို Preview များကို Cancel လုပ်သည်။ Path တွင် မပိတ်ဘဲ ပြင်ဆင်ခြင်းကို အဆုံးသတ်သည်။ Numeric field အတွင်း Return က Field edit ကို အဆုံးသတ်ပြီး Escape က ယခင်တန်ဖိုး ပြန်ထားသည်။
 
 Text တွင် Return က စာကြောင်းထည့်သည်။ Escape သို့မဟုတ် Primary+Enter က စာရိုက်မှုကို Commit လုပ်သည်။ Undo က Image History မတိုင်မီ စာရိုက်မှုကို ပြန်ယူသည်။ Focus ရှိသော Sidebar toggle တွင် Return/Space က Sidebar ခေါက်ပေးသည်။ Tool Options section header တွင် Return/Space က ထို Section ကို ဖြန့်/ခေါက်ပေးသည်။
 

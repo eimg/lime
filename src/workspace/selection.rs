@@ -30,6 +30,11 @@ pub(super) enum SelectionGesture {
         rect: PixelRect,
         grab: (i64, i64),
     },
+    MoveMask {
+        rect: PixelRect,
+        grab: (i64, i64),
+        delta: (i64, i64),
+    },
     Resize {
         rect: PixelRect,
         edges: SelectionEdges,
@@ -514,55 +519,67 @@ impl Workspace {
         let Some(anchor) = self.unclamped_pointer_pixel(position, scale) else {
             return;
         };
-        let gesture =
-            if let Some(rect) = adjustable_rect(selection).filter(|_| op == SelectionOp::Replace) {
-                let hit = self
-                    .selection_screen_rect(rect, scale)
-                    .map(|(left, top, right, bottom)| {
-                        hit_selection(
-                            left,
-                            top,
-                            right,
-                            bottom,
-                            f32::from(position.x),
-                            f32::from(position.y),
-                            HANDLE_SLOP,
-                        )
-                    })
-                    .unwrap_or(SelectionHit::Outside);
-                match hit {
-                    SelectionHit::Edge(edges) => {
-                        let Some(anchor) = self.unclamped_pointer_pixel(position, scale) else {
-                            return;
-                        };
-                        SelectionGesture::Resize {
-                            rect,
-                            edges,
-                            anchor,
-                        }
-                    }
-                    SelectionHit::Inside => {
-                        let pixel = self
-                            .pointer_pixel(position, scale)
-                            .unwrap_or((rect.x, rect.y));
-                        SelectionGesture::Move {
-                            rect,
-                            grab: (pixel.0 - rect.x, pixel.1 - rect.y),
-                        }
-                    }
-                    SelectionHit::Outside => SelectionGesture::Create {
-                        origin: position,
+        let gesture = if let Some(rect) =
+            adjustable_rect(selection.clone()).filter(|_| op == SelectionOp::Replace)
+        {
+            let hit = self
+                .selection_screen_rect(rect, scale)
+                .map(|(left, top, right, bottom)| {
+                    hit_selection(
+                        left,
+                        top,
+                        right,
+                        bottom,
+                        f32::from(position.x),
+                        f32::from(position.y),
+                        HANDLE_SLOP,
+                    )
+                })
+                .unwrap_or(SelectionHit::Outside);
+            match hit {
+                SelectionHit::Edge(edges) => {
+                    let Some(anchor) = self.unclamped_pointer_pixel(position, scale) else {
+                        return;
+                    };
+                    SelectionGesture::Resize {
+                        rect,
+                        edges,
                         anchor,
-                        op,
-                    },
+                    }
                 }
-            } else {
-                SelectionGesture::Create {
+                SelectionHit::Inside => {
+                    let pixel = self
+                        .pointer_pixel(position, scale)
+                        .unwrap_or((rect.x, rect.y));
+                    SelectionGesture::Move {
+                        rect,
+                        grab: (pixel.0 - rect.x, pixel.1 - rect.y),
+                    }
+                }
+                SelectionHit::Outside => SelectionGesture::Create {
                     origin: position,
                     anchor,
                     op,
-                }
-            };
+                },
+            }
+        } else if let Some(rect) = mask_move_hit(
+            &selection,
+            anchor,
+            self.active_tab().unwrap().document.content.size(),
+            op,
+        ) {
+            SelectionGesture::MoveMask {
+                rect,
+                grab: (anchor.0 - rect.x, anchor.1 - rect.y),
+                delta: (0, 0),
+            }
+        } else {
+            SelectionGesture::Create {
+                origin: position,
+                anchor,
+                op,
+            }
+        };
         self.selection_drag = Some(gesture);
         cx.notify();
     }
@@ -613,6 +630,22 @@ impl Workspace {
                     })
                 }
             }
+            SelectionGesture::MoveMask { rect, grab, .. } => {
+                if let Some(pixel) = pointer {
+                    let target = move_rect(rect, pixel, grab, width, height);
+                    let next = SelectionGesture::MoveMask {
+                        rect,
+                        grab,
+                        delta: (target.x - rect.x, target.y - rect.y),
+                    };
+                    if self.selection_drag != Some(next) {
+                        self.selection_drag = Some(next);
+                        cx.notify();
+                    }
+                }
+                // Translate cached outlines while dragging; copy mask pixels only on commit.
+                Some(previous)
+            }
             SelectionGesture::Move { rect, grab } => pointer.map(|pixel| {
                 placed_selection(
                     previous,
@@ -655,9 +688,23 @@ impl Workspace {
     }
 
     pub(super) fn finish_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let gesture = self.selection_drag.take();
+        let gesture = self.selection_drag;
         let preview = self.selection_preview.clone();
         match (gesture, preview) {
+            (Some(SelectionGesture::MoveMask { delta, .. }), _) => {
+                if delta == (0, 0) {
+                    self.clear_selection_gesture();
+                    cx.notify();
+                } else {
+                    self.update_selection(
+                        move |selection, (width, height)| {
+                            selection.rebase(-delta.0, -delta.1, width, height)
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
             (Some(SelectionGesture::Create { op, .. }), Some(shape)) => {
                 let feather = self.creation_feather_radius();
                 self.update_selection(
@@ -679,18 +726,41 @@ impl Workspace {
                 self.select_none(window, cx);
             }
             (Some(_), Some(selection)) => self.commit_placed_selection(selection, window, cx),
-            (Some(_), None) => cx.notify(),
+            (Some(_), None) => {
+                self.clear_selection_gesture();
+                cx.notify();
+            }
             (None, _) => {
                 self.selection_preview = None;
             }
         }
     }
 
+    pub(super) fn selection_base_preview(&self) -> Option<Selection> {
+        if self.selection_preview.is_some()
+            && matches!(self.selection_drag, Some(SelectionGesture::Create { op, .. }) if op != SelectionOp::Replace)
+        {
+            return self.active_tab().map(|tab| tab.selection.clone());
+        }
+        self.active_tab()?.pending_canvas()?.selection_base.clone()
+    }
+
+    pub(super) fn selection_preview_offset(&self) -> (i64, i64) {
+        if let Some(SelectionGesture::MoveMask { delta, .. }) = self.selection_drag {
+            return delta;
+        }
+        self.active_tab()
+            .and_then(|tab| tab.pending_canvas())
+            .map_or((0, 0), |pending| pending.selection_offset)
+    }
+
     pub(super) fn selection_cursor(&self, scale: f32) -> CursorStyle {
         if let Some(gesture) = self.selection_drag {
             return match gesture {
                 SelectionGesture::Create { .. } => CursorStyle::Crosshair,
-                SelectionGesture::Move { .. } => CursorStyle::ClosedHand,
+                SelectionGesture::Move { .. } | SelectionGesture::MoveMask { .. } => {
+                    CursorStyle::ClosedHand
+                }
                 SelectionGesture::Resize { edges, .. } => edges.cursor(),
             };
         }
@@ -700,8 +770,22 @@ impl Workspace {
         let Some(selection) = self.active_tab().map(|tab| tab.selection.clone()) else {
             return CursorStyle::Crosshair;
         };
-        let Some(rect) = adjustable_rect(selection) else {
-            return CursorStyle::Crosshair;
+        let Some(rect) = adjustable_rect(selection.clone()) else {
+            let hit = self
+                .unclamped_pointer_pixel(position, scale)
+                .and_then(|pixel| {
+                    mask_move_hit(
+                        &selection,
+                        pixel,
+                        self.active_tab()?.document.content.size(),
+                        SelectionOp::Replace,
+                    )
+                });
+            return if hit.is_some() {
+                CursorStyle::OpenHand
+            } else {
+                CursorStyle::Crosshair
+            };
         };
         let Some((left, top, right, bottom)) = self.selection_screen_rect(rect, scale) else {
             return CursorStyle::Crosshair;
@@ -1439,7 +1523,7 @@ fn rect_for_radius(selection: &Selection) -> Option<PixelRect> {
 }
 
 pub(super) fn selection_op(modifiers: &gpui::Modifiers) -> SelectionOp {
-    match (modifiers.shift, modifiers.control) {
+    match (modifiers.shift, modifiers.secondary()) {
         (true, true) => SelectionOp::Intersect,
         (true, false) => SelectionOp::Add,
         (false, true) => SelectionOp::Subtract,
@@ -1468,6 +1552,22 @@ pub(super) fn free_node_at(
 pub(super) fn near_polygon_start(origin: Point<Pixels>, pointer: Point<Pixels>) -> bool {
     let delta = pointer - origin;
     f32::from(delta.x).hypot(f32::from(delta.y)) <= POLYGON_CLOSE_SLOP
+}
+
+fn mask_move_hit(
+    selection: &Selection,
+    pixel: (i64, i64),
+    size: (u32, u32),
+    op: SelectionOp,
+) -> Option<PixelRect> {
+    if op != SelectionOp::Replace
+        || !matches!(selection, Selection::Mask(_))
+        || selection.feather_geometry().is_some()
+        || !selection.covers(pixel.0, pixel.1, size.0, size.1)
+    {
+        return None;
+    }
+    selection.bounds(size.0, size.1)
 }
 
 pub(super) fn adjustable_rect(selection: Selection) -> Option<PixelRect> {
@@ -1658,6 +1758,82 @@ pub(super) enum SelectionCommand {
 mod selection_input_tests {
     use super::*;
     use crate::constraints::AspectRatio;
+
+    #[test]
+    fn combined_masks_move_without_filling_holes_or_losing_soft_coverage() {
+        let mut tab = super::super::preview_handoff_tests::tab();
+        let size = tab.document.content.size();
+        let original = Selection::Rect(PixelRect::new(2, 2, 8, 8));
+        let cutout = Selection::Rect(PixelRect::new(4, 4, 3, 3));
+        let subtracted =
+            original
+                .clone()
+                .combine(cutout.clone(), SelectionOp::Subtract, size.0, size.1);
+        let intersected = original.combine(cutout, SelectionOp::Intersect, size.0, size.1);
+        assert!(adjustable_rect(intersected).is_some());
+        assert!(adjustable_rect(subtracted.clone()).is_none());
+        assert!(mask_move_hit(&subtracted, (3, 3), size, SelectionOp::Replace).is_some());
+        assert!(mask_move_hit(&subtracted, (5, 5), size, SelectionOp::Replace).is_none());
+        for op in [
+            SelectionOp::Add,
+            SelectionOp::Subtract,
+            SelectionOp::Intersect,
+        ] {
+            assert!(mask_move_hit(&subtracted, (3, 3), size, op).is_none());
+        }
+        // Compound feathered coverage must translate byte-for-byte, not regenerate a shape.
+        let soft = subtracted.feather(1, size.0, size.1);
+        assert!(soft.feather_geometry().is_none());
+        let rect = mask_move_hit(&soft, (3, 3), size, SelectionOp::Replace).unwrap();
+        let target = move_rect(rect, (6, 5), (3 - rect.x, 3 - rect.y), size.0, size.1);
+        let delta = (target.x - rect.x, target.y - rect.y);
+        assert_eq!(delta, (3, 2));
+        let moved = soft.clone().rebase(-delta.0, -delta.1, size.0, size.1);
+        for y in 0..size.1 as i64 {
+            for x in 0..size.0 as i64 {
+                assert_eq!(
+                    moved.coverage(x, y, size.0, size.1),
+                    soft.coverage(x - delta.0, y - delta.1, size.0, size.1)
+                );
+            }
+        }
+        let edge = move_rect(rect, (100, -100), (0, 0), size.0, size.1);
+        assert_eq!(edge.right(), i64::from(size.0));
+        assert_eq!(edge.y, 0);
+        assert_eq!(moved.clone().rebase(delta.0, delta.1, size.0, size.1), soft);
+        tab.selection = soft.clone();
+        publish_selection(&mut tab, moved);
+        assert!(!tab.history.is_dirty());
+        let state = tab.state();
+        assert_eq!(tab.history.undo(state, 2).unwrap().selection, soft);
+    }
+
+    #[test]
+    fn selection_combinations_use_the_platform_primary_modifier() {
+        for (shift, primary, expected) in [
+            (false, false, SelectionOp::Replace),
+            (true, false, SelectionOp::Add),
+            (false, true, SelectionOp::Subtract),
+            (true, true, SelectionOp::Intersect),
+        ] {
+            let modifiers = gpui::Modifiers {
+                shift,
+                platform: cfg!(target_os = "macos") && primary,
+                control: !cfg!(target_os = "macos") && primary,
+                ..Default::default()
+            };
+            assert_eq!(selection_op(&modifiers), expected);
+        }
+        // Control-click is a native right-click on macOS, never subtraction.
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            selection_op(&gpui::Modifiers {
+                control: true,
+                ..Default::default()
+            }),
+            SelectionOp::Replace
+        );
+    }
 
     fn queue(tab: &super::super::Tab, edits: &[SelectionInput]) -> PendingSelectionInputs {
         let mut pending = PendingSelectionInputs {
