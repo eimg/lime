@@ -998,7 +998,8 @@ Grow/Shrink use linear-time running max/min filters to preserve soft coverage.
   manual position protection and move the whole document consistently.
   `src/document/composite.rs` blends visible layers for display, sampling, and
   raster output.
-- `src/text.rs` rasterizes a layer's text with cosmic-text. One style covers
+- `src/text.rs` rasterizes a layer's text with cosmic-text, preserving font,
+  size, color, bold, and italic per styled range. Spacing and layout apply to
   the whole layer. The cached bitmap is what the canvas and export paint, and
   the project also stores the source so a machine with different fonts can
   still open the pixels. It also builds a caret map with a stop at every
