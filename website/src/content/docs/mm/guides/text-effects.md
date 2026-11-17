@@ -2,8 +2,8 @@
 title: "Text၊ Drop Shadow နှင့် Outline ထည့်ရန်"
 description: "Text ကို ဆက်ပြင်နိုင်အောင် ထားပြီး သီးခြား Drop Shadow သို့မဟုတ် Outline ထည့်နည်း။"
 translationKey: guides/text-effects
-sourceRevision: "text-styles-2"
-translatedRevision: "text-styles-2"
+sourceRevision: "text-box-resize-1"
+translatedRevision: "text-box-resize-1"
 ---
 
 ## Editable Text ထည့်ရန် {#steps}
@@ -11,7 +11,7 @@ translatedRevision: "text-styles-2"
 1. **Text** (`T`) ရွေးပြီး Canvas ၏ လွတ်နေသောနေရာတွင် Click လုပ်ပါ။ မည်သည့် Layer ကို ရွေးထားသည်ဖြစ်စေ Text အသစ်က Layer အားလုံး၏ အပေါ်ဆုံးတွင် ပေါ်သည်။ ရှိပြီးသား Text ကို Click လုပ်လျှင် ၎င်း၏ လက်ရှိ Layer အစီအစဉ်အတိုင်း ပြင်သည်။
 2. စာရိုက်ပါ သို့မဟုတ် Paste လုပ်ပါ။ Return က စာကြောင်းအသစ်ထည့်သည်။ Native composition လိုအပ်သော Input method အတွက် အခြား App တွင် စာရေးပြီး Lime ထဲ Paste လုပ်ပါ။
 3. **Tool Options** တွင် ထည့်သွင်းထားသော Font၊ Size၊ Color၊ Bold/Italic၊ Spacing နှင့် Alignment ရွေးပါ။ Font၊ Size၊ Color၊ Bold နှင့် Italic က Highlight လုပ်ထားသော စာသားကိုသာ ပြောင်းသည်။ စာသား Highlight မလုပ်ထားလျှင် စာရိုက်နေစဉ်မှာပင် လက်ရှိ Text Layer တစ်ခုလုံးကို ချက်ချင်းပြောင်းသည်။ စကားလုံးရွေးရန် Double-click လုပ်ပါ။ မြင်နေရသော စာတစ်ကြောင်းရွေးရန် Triple-click လုပ်ပါ။ စာခေါက်ထားလျှင် မြင်ရသော တစ်ကြောင်းချင်းစီကိုသာ ရွေးသည်။ Spacing နှင့် Alignment က Layer တစ်ခုလုံးကို အမြဲသက်ရောက်သည်။
-4. Box အတွင်း စာခေါက်ရန် **Fixed box** ဖွင့်ပါ။ ထို့နောက် Width/Height ပြင်နိုင်သည်။ Overflow notice ပေါ်လျှင် စာအချို့ Box အပြင်ရောက်နေသည်။ ပိုမြင်ရန် Box ချဲ့ပါ၊ သို့မဟုတ် ကန့်သတ်ချက်ဖယ်ရန် Fixed box ပိတ်ပါ။
+4. Box အတွင်း စာခေါက်ရန် **Fixed box** ဖွင့်ပါ။ အရွယ်ပြောင်းရန် Canvas ပေါ်ရှိ Box အစွန်း သို့မဟုတ် ထောင့်လက်ကိုင်ကို ဆွဲပါ၊ သို့မဟုတ် Width/Height ရိုက်ထည့်ပါ။ Font size မပြောင်းဘဲ စာကို ပြန်ခေါက်ပေးသည်။ Drag တစ်ကြိမ်ကို Undo ဖြင့် ပြန်ယူနိုင်သည်။ Position Lock ဖွင့်ထားလျှင် မူလနေရာမရွေ့စေရန် ညာဘက်နှင့် အောက်ဘက်လက်ကိုင်များသာ ပေါ်သည်။ Overflow notice ပေါ်လျှင် စာအချို့ Box အပြင်ရောက်နေသည်။ ပိုမြင်ရန် Box ချဲ့ပါ၊ သို့မဟုတ် ကန့်သတ်ချက်ဖယ်ရန် Fixed box ပိတ်ပါ။
 5. အပြင်ကို Click လုပ်ပါ၊ သို့မဟုတ် Cmd/Ctrl+Enter နှိပ်ပါ။ Escape လည်း Text draft ကို Commit လုပ်ပြီး စာရိုက်မှုကို မပယ်ဖျက်ပါ။ ပြန်ယူရန် **Edit → Undo** သုံးပါ။
 
 Text Size ကို **ပုံ၏ Pixel 1–4,096** အထိ သတ်မှတ်နိုင်သည်။ Resolution မြင့်သောပုံများတွင် 300 သို့မဟုတ် 1,024 ကဲ့သို့သော Size များကို သုံးနိုင်သည်။ Tool Options တွင် Size ကို တိုက်ရိုက်ရိုက်ထည့်ပါ။ Text အလွန်ကြီးလျှင် Lime ၏ Layer အရွယ်အစားနှင့် Memory ကန့်သတ်ချက်အတွင်း ရှိရန် လိုသည်။

@@ -130,7 +130,12 @@ impl Render for Workspace {
                     if event.pressed_button == Some(MouseButton::Left) {
                         this.extend_opacity_drag(event.position, cx);
                         this.extend_guide(event.position, window.scale_factor(), cx);
-                        this.extend_text_selection(event.position, window.scale_factor(), cx);
+                        this.extend_text_selection(
+                            event.position,
+                            window.scale_factor(),
+                            window,
+                            cx,
+                        );
                     }
                 }),
             )
@@ -138,14 +143,14 @@ impl Render for Workspace {
                 this.end_opacity_drag(event, window, cx);
                 if event.button == MouseButton::Left {
                     this.finish_guide(event.position, window, cx);
-                    this.finish_text_selection(event.position, window.scale_factor(), cx);
+                    this.finish_text_selection(event.position, window.scale_factor(), window, cx);
                 }
             }))
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| {
                     this.finish_guide(event.position, window, cx);
-                    this.finish_text_selection(event.position, window.scale_factor(), cx);
+                    this.finish_text_selection(event.position, window.scale_factor(), window, cx);
                 }),
             )
             .on_action(|_: &MinimizeWindow, window, _| window.minimize_window())
@@ -1496,7 +1501,7 @@ impl Workspace {
                         },
                     )
                     .when(self.preferences.tool == Tool::Text && !tab.busy(), |area| {
-                        area.cursor(CursorStyle::IBeam).on_mouse_down(
+                        area.cursor(self.text_cursor(scale)).on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
                                 this.place_text(
@@ -3790,7 +3795,7 @@ fn image_preview(
                 paint_handles(window, &geometry, width, height, rect);
             }
             if let Some(caret) = text_caret.as_ref() {
-                paint_text_caret(window, &geometry, width, height, visible, caret);
+                paint_text_caret(window, &geometry, width, height, visible, viewport, caret);
             }
             if let Some(frame) = scale_frame {
                 paint_scale_frame(window, &geometry, width, height, viewport, frame);
@@ -4862,6 +4867,7 @@ fn paint_text_caret(
     width: u32,
     height: u32,
     visible: Bounds<Pixels>,
+    viewport: Bounds<Pixels>,
     caret: &super::text_ui::TextCaret,
 ) {
     if width == 0 || height == 0 {
@@ -4873,9 +4879,11 @@ fn paint_text_caret(
             let bounds = Bounds::from_corners(project(x, y), project(x + w, y + h));
             window.paint_quad(fill(bounds, rgba(0xacc6ff40)));
         }
+    });
+    window.with_content_mask(Some(ContentMask { bounds: viewport }), |window| {
         let (left, top, right, bottom) = caret.frame;
         let frame = Bounds::from_corners(project(left, top), project(right, bottom));
-        let pad = px(4.);
+        let pad = px(if caret.fixed { 0. } else { 4. });
         let frame = Bounds::from_corners(
             point(frame.left() - pad, frame.top() - pad),
             point(frame.right() + pad, frame.bottom() + pad),
@@ -4893,6 +4901,11 @@ fn paint_text_caret(
             rgba(0xacc6ffc0),
             gpui::BorderStyle::Dashed,
         ));
+        for &(x, y) in &caret.handles {
+            paint_control_handle(window, project(x, y), false);
+        }
+    });
+    window.with_content_mask(Some(ContentMask { bounds: visible }), |window| {
         if !caret.visible {
             return;
         }

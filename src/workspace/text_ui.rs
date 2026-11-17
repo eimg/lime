@@ -169,6 +169,91 @@ pub(super) struct TextCaret {
     // The box of the text being edited, so a click that starts new text is obvious.
     pub frame: (f32, f32, f32, f32),
     pub visible: bool,
+    pub handles: Vec<(f32, f32)>,
+    pub fixed: bool,
+}
+
+// Directions relative to the fixed box's center. The nearest grip wins hit
+// testing, with corners first to break equal-distance ties in very small boxes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TextBoxHandle(i8, i8);
+
+impl TextBoxHandle {
+    fn available(position_locked: bool) -> impl Iterator<Item = Self> {
+        [
+            Self(-1, -1),
+            Self(1, -1),
+            Self(-1, 1),
+            Self(1, 1),
+            Self(0, -1),
+            Self(-1, 0),
+            Self(1, 0),
+            Self(0, 1),
+        ]
+        .into_iter()
+        .filter(move |handle| !position_locked || (handle.0 >= 0 && handle.1 >= 0))
+    }
+
+    fn point(self, (left, top, right, bottom): (f32, f32, f32, f32)) -> (f32, f32) {
+        (
+            left + (right - left) * (self.0 + 1) as f32 / 2.,
+            top + (bottom - top) * (self.1 + 1) as f32 / 2.,
+        )
+    }
+
+    fn cursor(self) -> CursorStyle {
+        match (self.0, self.1) {
+            (0, _) => CursorStyle::ResizeUpDown,
+            (_, 0) => CursorStyle::ResizeLeftRight,
+            (x, y) if x == y => CursorStyle::ResizeUpLeftDownRight,
+            _ => CursorStyle::ResizeUpRightDownLeft,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct TextBoxDrag {
+    handle: TextBoxHandle,
+    start: (i64, i64),
+    before: TextEdit,
+}
+
+impl TextBoxDrag {
+    fn geometry(&self, pointer: (i64, i64)) -> ((i32, i32), TextLayout) {
+        fn edge(origin: i32, size: u32, direction: i8, delta: i64) -> (i32, u32) {
+            if direction == 0 {
+                return (origin, size);
+            }
+            let size = i64::from(size);
+            let target = size
+                .saturating_add(delta.saturating_mul(i64::from(direction)))
+                .clamp(1, i64::from(document::MAX_NEW_EDGE));
+            let origin = i64::from(origin);
+            if direction < 0 {
+                let moved =
+                    (origin + size - target).clamp(i64::from(i32::MIN), i64::from(i32::MAX));
+                (moved as i32, (origin + size - moved) as u32)
+            } else {
+                (origin as i32, target as u32)
+            }
+        }
+        let mut layout = self.before.layout;
+        let (x, width) = edge(
+            self.before.anchor.0,
+            layout.width.unwrap(),
+            self.handle.0,
+            pointer.0.saturating_sub(self.start.0),
+        );
+        let (y, height) = edge(
+            self.before.anchor.1,
+            layout.height.unwrap(),
+            self.handle.1,
+            pointer.1.saturating_sub(self.start.1),
+        );
+        layout.width = Some(width);
+        layout.height = Some(height);
+        ((x, y), layout)
+    }
 }
 
 #[derive(Clone)]
@@ -201,6 +286,7 @@ pub(super) struct TextDraft {
     pending_click_count: usize,
     pending_drag_hit: Option<(f32, f32)>,
     dragging: bool,
+    box_drag: Option<TextBoxDrag>,
     baseline: Arc<text::RenderedText>,
     baseline_anchor: (i32, i32),
     undo: Vec<TextEdit>,
@@ -512,18 +598,27 @@ impl TextDraft {
     }
 
     fn stop_pointer(&mut self) {
-        self.dragging = false;
+        self.end_pointer_drag();
         self.pending_hit = None;
         self.pending_drag_hit = None;
     }
 
+    fn finish_box_drag(&mut self) {
+        if let Some(drag) = self.box_drag.take()
+            && (self.anchor != drag.before.anchor || self.layout != drag.before.layout)
+        {
+            self.record(drag.before);
+        }
+    }
+
     pub(super) fn end_pointer_drag(&mut self) {
+        self.finish_box_drag();
         self.dragging = false;
         self.pending_drag_hit = None;
     }
 
     pub(super) fn pointer_dragging(&self) -> bool {
-        self.dragging
+        self.dragging || self.box_drag.is_some()
     }
 
     fn apply_pointer_hit(&mut self, point: (f32, f32), extend: bool, click_count: usize) {
@@ -599,6 +694,7 @@ impl TextDraft {
     }
 
     pub(super) fn restore(&mut self, state: TextEdit) {
+        self.box_drag = None;
         self.runs = state.runs;
         self.insertion = state.insertion;
         self.layer_selected = state.layer_selected;
@@ -625,6 +721,7 @@ impl TextDraft {
     }
 
     fn step_history(&mut self, redo: bool) -> bool {
+        self.end_pointer_drag();
         let target = if redo {
             self.redo.pop()
         } else {
@@ -716,12 +813,81 @@ impl TextDraft {
 }
 
 impl Workspace {
+    fn text_position_locked(&self) -> bool {
+        self.text_draft
+            .as_ref()
+            .and_then(|draft| draft.layer)
+            .and_then(|id| self.active_tab()?.document.content.layer(id))
+            .is_some_and(|layer| layer.locks.position)
+    }
+
+    fn text_box_handle_at(
+        &self,
+        position: gpui::Point<gpui::Pixels>,
+        scale: f32,
+    ) -> Option<TextBoxHandle> {
+        let draft = self.text_draft.as_ref()?;
+        draft.layout.width.zip(draft.layout.height)?;
+        let tab = self
+            .active_tab()
+            .filter(|tab| !tab.busy() && tab.id == draft.tab)?;
+        let geometry =
+            super::canvas_tools::PreviewGeometry::for_tab(tab, self.viewport.get(), scale)?;
+        TextBoxHandle::available(self.text_position_locked())
+            .filter_map(|handle| {
+                let (x, y) = handle.point(draft.bounds());
+                let center = geometry.project(gpui::point(
+                    x / tab.document.width() as f32,
+                    y / tab.document.height() as f32,
+                ));
+                let dx = f32::from(center.x - position.x).abs();
+                let dy = f32::from(center.y - position.y).abs();
+                (dx <= 6. && dy <= 6.).then_some((handle, dx * dx + dy * dy))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(handle, _)| handle)
+    }
+
+    pub(super) fn text_cursor(&self, scale: f32) -> CursorStyle {
+        self.text_draft
+            .as_ref()
+            .and_then(|draft| draft.box_drag.as_ref().map(|drag| drag.handle))
+            .or_else(|| self.text_box_handle_at(self.canvas_cursor.position.get()?, scale))
+            .map_or(CursorStyle::IBeam, TextBoxHandle::cursor)
+    }
+
+    fn extend_text_box(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        scale: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pixel) = self.unclamped_pointer_pixel(position, scale) else {
+            return;
+        };
+        let Some(draft) = self.text_draft.as_mut() else {
+            return;
+        };
+        let Some(drag) = &draft.box_drag else {
+            return;
+        };
+        let (anchor, layout) = drag.geometry(pixel);
+        if draft.anchor != anchor || draft.layout != layout {
+            draft.anchor = anchor;
+            draft.layout = layout;
+            self.request_text_preview(window, cx);
+        }
+    }
+
     pub(super) fn extend_text_selection(
         &mut self,
         position: gpui::Point<gpui::Pixels>,
         scale: f32,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.extend_text_box(position, scale, window, cx);
         let Some(pixel) = self.unclamped_pointer_pixel(position, scale) else {
             return;
         };
@@ -744,12 +910,15 @@ impl Workspace {
         &mut self,
         position: gpui::Point<gpui::Pixels>,
         scale: f32,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.extend_text_selection(position, scale, cx);
+        self.extend_text_selection(position, scale, window, cx);
         if let Some(draft) = self.text_draft.as_mut() {
+            draft.finish_box_drag();
             draft.dragging = false;
         }
+        cx.notify();
     }
 
     pub(super) fn bind_text_actions(&self, root: Div, cx: &Context<Self>) -> Div {
@@ -1657,6 +1826,7 @@ impl Workspace {
             pending_click_count: 1,
             pending_drag_hit: None,
             dragging: false,
+            box_drag: None,
             undo: Vec::new(),
             redo: Vec::new(),
         });
@@ -1861,7 +2031,9 @@ impl Workspace {
     /// The caret and any selected text, in canvas pixels, while typing.
     pub(super) fn text_caret(&self) -> Option<TextCaret> {
         let draft = self.text_draft.as_ref()?;
-        if draft.layer_selected || self.active_tab().is_none_or(|tab| tab.id != draft.tab) {
+        if (draft.layer_selected && draft.layout.width.is_none())
+            || self.active_tab().is_none_or(|tab| tab.id != draft.tab)
+        {
             return None;
         }
         let (ax, ay) = (draft.anchor.0 as f32, draft.anchor.1 as f32);
@@ -1915,7 +2087,17 @@ impl Workspace {
             }),
             selection,
             frame: draft.bounds(),
-            visible: phase.is_multiple_of(2)
+            fixed: draft.layout.width.is_some(),
+            handles: if draft.layout.width.zip(draft.layout.height).is_some() {
+                TextBoxHandle::available(self.text_position_locked())
+                    .map(|handle| handle.point(draft.bounds()))
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            visible: !draft.layer_selected
+                && draft.box_drag.is_none()
+                && phase.is_multiple_of(2)
                 && x >= 0.
                 && top >= 0.
                 && draft.layout.width.is_none_or(|width| x <= width as f32)
@@ -1935,6 +2117,19 @@ impl Workspace {
         let Some(pixel) = self.unclamped_pointer_pixel(position, scale) else {
             return;
         };
+        if let Some(handle) = self.text_box_handle_at(position, scale) {
+            self.close_font_picker(window, cx);
+            if let Some(draft) = self.text_draft.as_mut() {
+                draft.stop_pointer();
+                draft.box_drag = Some(TextBoxDrag {
+                    handle,
+                    start: pixel,
+                    before: draft.state(),
+                });
+            }
+            cx.notify();
+            return;
+        }
         // Clicks this many screen points from a text box still edit that text.
         const SLOP: f32 = 12.0;
         let pad = self
@@ -2178,6 +2373,9 @@ impl Workspace {
     /// undo step; an unchanged or empty one just closes. Returns true when the
     /// commit job started, so the tab is busy until it lands.
     pub(super) fn finish_text(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if let Some(draft) = self.text_draft.as_mut() {
+            draft.end_pointer_drag();
+        }
         let Some(draft) = self.text_draft.as_ref() else {
             return false;
         };
@@ -2416,6 +2614,7 @@ impl Workspace {
             pending_click_count: 1,
             pending_drag_hit: None,
             dragging: false,
+            box_drag: None,
             undo: Vec::new(),
             redo: Vec::new(),
         });
@@ -2473,11 +2672,11 @@ impl Workspace {
             .as_ref()
             .is_some_and(|edit| edit.field == NumericField::TextSize);
         let changed = self.text_draft.as_mut().is_some_and(|draft| {
+            draft.stop_pointer();
             let previous = draft.state();
             if !mutate(draft) {
                 return false;
             }
-            draft.stop_pointer();
             if !numeric_size {
                 draft.record(previous);
             }
@@ -2779,11 +2978,9 @@ fn clamp_i32(value: i64) -> i32 {
 mod mixed_style_tests {
     use super::*;
 
-    #[test]
-    fn formatting_typing_history_and_recovery_keep_all_styles() {
-        let spec = text::runs::tests::sample("one two");
+    fn draft(spec: TextSpec) -> TextDraft {
         let rendered = Arc::new(text::render_spec(&spec).unwrap());
-        let mut draft = TextDraft {
+        TextDraft {
             runs: Vec::new(),
             insertion: None,
             layer_selected: false,
@@ -2811,11 +3008,96 @@ mod mixed_style_tests {
             pending_click_count: 1,
             pending_drag_hit: None,
             dragging: false,
+            box_drag: None,
             baseline: rendered,
             baseline_anchor: (0, 0),
             undo: Vec::new(),
             redo: Vec::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn fixed_box_resize_preserves_text_and_records_one_history_step() {
+        let mut spec = text::runs::tests::sample("one two");
+        spec.layout.width = Some(200);
+        spec.layout.height = Some(100);
+        spec.format_range(4..7, |style| style.size = 40.);
+        let mut draft = draft(spec);
+        // Preserve mixed runs in this fixture as well as selection/caret state.
+        draft.runs = draft.baseline.style.runs.clone();
+        draft.anchor = (10, 20);
+        let before = draft.state();
+        draft.box_drag = Some(TextBoxDrag {
+            handle: TextBoxHandle(-1, -1),
+            start: (10, 20),
+            before: before.clone(),
+        });
+        assert!(draft.pointer_dragging());
+        for pointer in [(-10, -10), (-30, -40)] {
+            (draft.anchor, draft.layout) = draft.box_drag.as_ref().unwrap().geometry(pointer);
+        }
+        assert_eq!(draft.anchor, (-30, -40));
+        assert_eq!(draft.layout.width, Some(240));
+        assert_eq!(draft.layout.height, Some(160));
+        let after = draft.state();
+        draft.end_pointer_drag(); // also the deactivation path
+        assert!(!draft.pointer_dragging());
+        assert_eq!(draft.undo.len(), 1);
+        draft.end_pointer_drag();
+        assert_eq!(draft.undo.len(), 1);
+        assert!(draft.step_history(false));
+        assert!(draft.state() == before);
+        assert!(draft.step_history(true));
+        assert!(draft.state() == after);
+        assert_eq!(draft.source, before.source);
+        assert_eq!(draft.runs, before.runs);
+        assert_eq!(draft.selected_range(), Some(4..7));
+        draft.box_drag = Some(TextBoxDrag {
+            handle: TextBoxHandle(1, 1),
+            start: (0, 0),
+            before: after,
+        });
+        draft.end_pointer_drag(); // a click without resizing does not add history
+        assert_eq!(draft.undo.len(), 1);
+    }
+
+    #[test]
+    fn fixed_box_resize_clamps_dimensions_and_respects_locked_anchor() {
+        let mut spec = text::runs::tests::sample("one two");
+        spec.layout.width = Some(200);
+        spec.layout.height = Some(100);
+        let before = draft(spec).state();
+        for handle in TextBoxHandle::available(false) {
+            let drag = TextBoxDrag {
+                handle,
+                start: (0, 0),
+                before: before.clone(),
+            };
+            for point in [(i64::MIN, i64::MAX), (i64::MAX, i64::MIN)] {
+                let (anchor, layout) = drag.geometry(point);
+                assert!(layout.allowed());
+                if handle.0 < 0 {
+                    assert_eq!(i64::from(anchor.0) + i64::from(layout.width.unwrap()), 200);
+                }
+                if handle.1 < 0 {
+                    assert_eq!(i64::from(anchor.1) + i64::from(layout.height.unwrap()), 100);
+                }
+            }
+        }
+        assert_eq!(TextBoxHandle::available(true).count(), 3);
+        for handle in TextBoxHandle::available(true) {
+            let drag = TextBoxDrag {
+                handle,
+                start: (0, 0),
+                before: before.clone(),
+            };
+            assert_eq!(drag.geometry((80, 50)).0, before.anchor);
+        }
+    }
+
+    #[test]
+    fn formatting_typing_history_and_recovery_keep_all_styles() {
+        let mut draft = draft(text::runs::tests::sample("one two"));
         let initial = draft.state();
         assert!(draft.format(|style| {
             style.size = 40.;

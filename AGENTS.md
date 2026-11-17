@@ -1484,7 +1484,13 @@ app backups, and project build caches can be removed when cleanup is requested.
   raster or editable-text source without changing that source.
 - `TextLayout` stores optional fixed Width/Height and Left/Center/Right alignment.
   Fixed boxes wrap by word or glyph, clip raster/caret/highlight coverage, retain
-  overflowing source, and expose an overflow notice. Draft history, defaults,
+  overflowing source, and expose an overflow notice. Fixed-box drafts show screen-sized
+  edge/corner grips; pointer resize reflows text through the existing preview worker,
+  keeps the opposite edge fixed, and records one text-undo step on release or
+  deactivation. It preserves source, styles, caret, and selection. Position-locked
+  text exposes only right/bottom grips so its layout anchor cannot move. Box grips
+  and their frame remain visible outside the image within the canvas viewport;
+  text/caret/highlight rendering stays clipped to the image. Draft history, defaults,
   previews, matches, and version 9 projects carry it. Caret maps retain visual
   wrap boundaries; glyph rasterization only visits visible fixed-box lines.
   `src/text/runs.rs` owns styled range formatting and insertion/deletion. Draft history,

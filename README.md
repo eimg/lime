@@ -73,6 +73,7 @@ appear when an image is open.
 New text appears above all layers, regardless of the selected layer.
 Text style controls change the whole draft unless text is highlighted.
 Double-click a word or triple-click a visible line to select it.
+Drag the handles of a fixed text box to resize it and reflow the text.
 Layer → Transform and the toolbox use the same Scale Layer, Rotate, Flip, and
 Perspective tools. Reselecting an active transform keeps its preview.
 Use Edit → **Stroke Path…** or **Stroke Selection…** to choose

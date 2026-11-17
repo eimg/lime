@@ -2,8 +2,8 @@
 title: "Add text, shadows, and outlines"
 description: "Keep text editable while adding a separate shadow or outside stroke."
 translationKey: guides/text-effects
-sourceRevision: "text-styles-2"
-translatedRevision: "text-styles-2"
+sourceRevision: "text-box-resize-1"
+translatedRevision: "text-box-resize-1"
 ---
 
 ## Add editable text {#steps}
@@ -11,7 +11,7 @@ translatedRevision: "text-styles-2"
 1. Choose **Text** (`T`) and click an empty area of the canvas. New text appears above all layers, regardless of which layer is selected. Clicking existing text edits it in its current layer position.
 2. Type or paste text. Return inserts a new line. For input methods requiring native composition, compose elsewhere and paste into Lime.
 3. In **Tool Options**, choose an installed font, size, color, Bold/Italic, spacing, and alignment. Font, size, color, Bold, and Italic affect highlighted text. With nothing highlighted, they change all text in the active layer immediately, including while you are typing. Double-click a word or triple-click a visible line to highlight it; wrapped lines are selected separately. Spacing and alignment always affect the whole layer.
-4. Turn on **Fixed box** to enable Width/Height and wrap text inside a box. An overflow notice means some stored text falls outside the visible box; enlarge it to reveal more, or turn Fixed box off to remove the limits.
+4. Turn on **Fixed box** to wrap text inside a box. Drag an edge or corner handle on the canvas, or type Width/Height, to resize it. Text reflows without changing its font size; Undo reverses a drag. Position-locked text offers only right/bottom handles to keep its anchor fixed. An overflow notice means some stored text falls outside the visible box; enlarge it to reveal more, or turn Fixed box off to remove the limits.
 5. Click outside or press Cmd/Ctrl+Enter to finish. Escape also commits a text draft; it does not discard typing. Choose **Edit → Undo** to reverse edits.
 
 Text size accepts **1–4,096 image pixels**, so you can use sizes such as 300 or 1,024 on high-resolution images. Type the size directly in Tool Options. Very large text still needs to fit within Lime’s layer dimensions and memory limits.
