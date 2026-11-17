@@ -34,7 +34,7 @@ Local preview keeps the `/lime/` prefix to catch GitHub Pages path errors.
 - `src/assets/`: shared screenshots and explanatory illustrations.
 
 Write about the published Lime release, using actual menu/control labels. The
-current guide covers 1.2.3. Use plain, concise Burmese for instructions and retain
+current guide covers 1.3.0. Use plain, concise Burmese for instructions and retain
 familiar software/editing terms in English. This applies to navigation, headings,
 search labels, captions, and prose, not only literal menu paths. Keep ordinary
 sentences natural instead of mechanically replacing every Burmese word.
